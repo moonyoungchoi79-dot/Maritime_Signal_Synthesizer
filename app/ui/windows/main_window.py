@@ -1,37 +1,23 @@
-import sys
 import os
-import math
 import json
-import csv
 import random
 import datetime
-import re
 import shutil
 import traceback
-import socket
-import time
-import tempfile
-import uuid
-import numpy as np
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
     QPushButton, QLabel, QLineEdit, QTextEdit, QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox,
-    QSlider, QProgressBar, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem,
-    QHeaderView, QTreeWidget, QTreeWidgetItem, QTabWidget, QTabBar, QStyleOptionTab,
-    QStackedWidget, QGroupBox, QFrame, QSplitter, QScrollArea, QMessageBox, QFileDialog,
-    QColorDialog, QInputDialog, QDialog, QDialogButtonBox, QMenuBar, QMenu,
-    QToolBar, QStatusBar, QGraphicsView, QGraphicsScene, QGraphicsItem, QGraphicsPathItem,
-    QGraphicsPolygonItem, QGraphicsEllipseItem, QGraphicsTextItem, QAbstractItemView,
-    QAbstractSpinBox, QTextBrowser, QSizePolicy, QDateTimeEdit
+    QTableWidget, QTableWidgetItem, QHeaderView, QTabWidget, QTabBar, QStyleOptionTab,
+    QGroupBox, QFrame, QMessageBox, QFileDialog, QColorDialog, QInputDialog, QDialog, 
+    QDialogButtonBox, QMenu, QToolBar, QGraphicsScene, QGraphicsItem, QGraphicsPathItem,
+    QGraphicsPolygonItem, QGraphicsEllipseItem, QGraphicsTextItem, QSizePolicy
 )
 from PyQt6.QtCore import (
-    Qt, pyqtSignal, QObject, QThread, QTimer, QPoint, QPointF, QRect, QRectF, QSize, QSizeF,
-    QEvent, QUrl, QDate, QTime, QDateTime
+    Qt, pyqtSignal, QThread, QPoint, QPointF, QSize
 )
 from PyQt6.QtGui import (
-    QColor, QPalette, QPen, QBrush, QFont, QPainter, QPainterPath, QPolygonF, QIcon, QPixmap,
-    QCursor, QAction
+    QColor, QPalette, QPen, QBrush, QFont, QPainter, QPainterPath, QPolygonF, QIcon, QPixmap
 )
 from app.core.constants import APP_NAME, DEFAULT_WINDOW_SIZE, CSV_HEADER
 from app.core.models.project import current_project
@@ -1388,7 +1374,7 @@ class MainWindow(QMainWindow):
             return
         indices = self.speed_pop.get_selected_ships()
         self.speed_worker.target_ship_indices = indices
-        self.speed_worker.variance = current_project.settings.speed_variance
+        self.speed_worker.variance = current_project.settings.random_target_speed_variance
         self.speed_thread.start()
 
     def on_speed_finished(self, idx):

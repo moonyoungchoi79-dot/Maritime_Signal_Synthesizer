@@ -25,7 +25,7 @@ from app.core.utils import sanitize_filename
 from app.core.geometry import coords_to_pixel, pixel_to_coords, normalize_lon
 from app.core.nmea import parse_nmea_fields
 from app.ui.map.sim_map_view import SimMapView
-from app.workers.simulation_workor import SimulationWorker
+from app.workers.simulation_worker import SimulationWorker
 from app.ui.dialogs.rtg_dialog import RTGDialog
 
 class SimulationWindow(QWidget):

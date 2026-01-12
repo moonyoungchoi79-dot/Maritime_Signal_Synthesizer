@@ -1,37 +1,17 @@
-import sys
-import os
-import math
-import json
 import csv
-import random
 import datetime
-import re
-import shutil
-import traceback
-import socket
 import time
-import tempfile
-import uuid
-import numpy as np
 
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
-    QPushButton, QLabel, QLineEdit, QTextEdit, QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox,
-    QSlider, QProgressBar, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem,
-    QHeaderView, QTreeWidget, QTreeWidgetItem, QTabWidget, QTabBar, QStyleOptionTab,
-    QStackedWidget, QGroupBox, QFrame, QSplitter, QScrollArea, QMessageBox, QFileDialog,
-    QColorDialog, QInputDialog, QDialog, QDialogButtonBox, QMenuBar, QMenu,
-    QToolBar, QStatusBar, QGraphicsView, QGraphicsScene, QGraphicsItem, QGraphicsPathItem,
-    QGraphicsPolygonItem, QGraphicsEllipseItem, QGraphicsTextItem, QAbstractItemView,
-    QAbstractSpinBox, QTextBrowser, QSizePolicy, QDateTimeEdit
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, 
+    QDoubleSpinBox, QSlider, QMessageBox, QFileDialog, QGraphicsScene, 
+    QGraphicsPolygonItem
 )
 from PyQt6.QtCore import (
-    Qt, pyqtSignal, QObject, QThread, QTimer, QPoint, QPointF, QRect, QRectF, QSize, QSizeF,
-    QEvent, QUrl, QDate, QTime, QDateTime
+    Qt, QTimer, QPointF
 )
 from PyQt6.QtGui import (
-    QColor, QPalette, QPen, QBrush, QFont, QPainter, QPainterPath, QPolygonF, QIcon, QPixmap,
-    QCursor, QAction
+    QPen, QBrush, QPolygonF
 )
 from app.ui.map.map_view import MapView
 from app.core.geometry import coords_to_pixel, pixel_to_coords
