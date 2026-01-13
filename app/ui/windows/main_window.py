@@ -131,6 +131,8 @@ class MainWindow(QMainWindow):
         
         self.data_changed.connect(self.on_data_changed)
         
+        self.speed_gen_total = 0
+        self.speed_gen_count = 0
         # Initialize tab state
         self.update_sim_tab_state("STOP")
 
@@ -1177,21 +1179,48 @@ class MainWindow(QMainWindow):
                 p.areas.append(area)
 
             p.events = []
-            for e_data in data.get("events", []):
-                evt = EventTrigger(
-                    id=e_data["id"],
-                    name=e_data["name"],
-                    enabled=e_data.get("enabled", True),
-                    trigger_type=e_data["trigger_type"],
-                    condition_value=e_data["condition_value"],
-                    action_type=e_data["action_type"],
-                    target_ship_idx=e_data["target_ship_idx"],
-                    action_value=e_data["action_value"],
-                    is_relative_to_end=e_data.get("is_relative_to_end", False),
-                    reference_ship_idx=e_data.get("reference_ship_idx", -1)
-                )
-                evt.action_option = e_data.get("action_option", "")
-                p.events.append(evt)
+            
+            # Load from Event folder (New Standard)
+            event_dir = os.path.join(p.project_path, "Event")
+            if os.path.exists(event_dir):
+                for fname in os.listdir(event_dir):
+                    if fname.endswith(".json"):
+                        try:
+                            with open(os.path.join(event_dir, fname), 'r', encoding='utf-8') as f:
+                                e_data = json.load(f)
+                                evt = EventTrigger(
+                                    id=e_data["id"],
+                                    name=e_data["name"],
+                                    enabled=e_data.get("enabled", True),
+                                    trigger_type=e_data["trigger_type"],
+                                    condition_value=e_data["condition_value"],
+                                    action_type=e_data["action_type"],
+                                    target_ship_idx=e_data["target_ship_idx"],
+                                    action_value=e_data["action_value"],
+                                    is_relative_to_end=e_data.get("is_relative_to_end", False),
+                                    reference_ship_idx=e_data.get("reference_ship_idx", -1)
+                                )
+                                evt.action_option = e_data.get("action_option", "")
+                                p.events.append(evt)
+                        except: pass
+            
+            # Fallback: Load from project.json if Event folder was empty or didn't exist (Legacy)
+            if not p.events and data.get("events"):
+                for e_data in data.get("events", []):
+                    evt = EventTrigger(
+                        id=e_data["id"],
+                        name=e_data["name"],
+                        enabled=e_data.get("enabled", True),
+                        trigger_type=e_data["trigger_type"],
+                        condition_value=e_data["condition_value"],
+                        action_type=e_data["action_type"],
+                        target_ship_idx=e_data["target_ship_idx"],
+                        action_value=e_data["action_value"],
+                        is_relative_to_end=e_data.get("is_relative_to_end", False),
+                        reference_ship_idx=e_data.get("reference_ship_idx", -1)
+                    )
+                    evt.action_option = e_data.get("action_option", "")
+                    p.events.append(evt)
 
             # Load Scenarios from Project/Scenario folder
             scen_dir = os.path.join(p.project_path, "Scenario")
@@ -1247,6 +1276,7 @@ class MainWindow(QMainWindow):
         # Create folders
         os.makedirs(os.path.join(p.project_path, "Object"), exist_ok=True)
         os.makedirs(os.path.join(p.project_path, "Scenario"), exist_ok=True)
+        os.makedirs(os.path.join(p.project_path, "Event"), exist_ok=True)
         
         ships_list = []
         for s in p.ships:
@@ -1295,8 +1325,9 @@ class MainWindow(QMainWindow):
                 json.dump(areas_list[-1], f, indent=4)
 
         events_list = []
+        # Save Events individually to Event folder
         for e in p.events:
-            events_list.append({
+            e_data = {
                 "id": e.id,
                 "name": e.name,
                 "enabled": e.enabled,
@@ -1308,11 +1339,12 @@ class MainWindow(QMainWindow):
                 "is_relative_to_end": e.is_relative_to_end,
                 "reference_ship_idx": e.reference_ship_idx,
                 "action_option": getattr(e, 'action_option', "")
-            })
+            }
             
-        # Save events_library.json
-        with open(os.path.join(p.project_path, "events_library.json"), 'w', encoding='utf-8') as f:
-            json.dump(events_list, f, indent=4)
+            # Save to Event/{name}.json
+            fname = sanitize_filename(e.name) + ".json"
+            with open(os.path.join(p.project_path, "Event", fname), 'w', encoding='utf-8') as f:
+                json.dump(e_data, f, indent=4)
             
         # Save Scenarios
         if app_state.loaded_scenarios:
@@ -1351,7 +1383,7 @@ class MainWindow(QMainWindow):
             # Minimal info in project.json, full data in subfolders/files
             "ships": ships_list, # Keeping for backward compat or easy loading
             "areas": areas_list, # Keeping for backward compat
-            "events": events_list # Keeping for backward compat
+            "events": [] # Events are now in Event folder
         }
         
         fname = f"{sanitize_filename(p.project_name)}.json"
@@ -1515,18 +1547,26 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Busy", "Speed generation is already in progress.")
             return
         indices = self.speed_pop.get_selected_ships()
+        if not indices: return
+        
+        self.speed_gen_total = len(indices)
+        self.speed_gen_count = 0
+        
         self.speed_worker.target_ship_indices = indices
         self.speed_worker.variance = current_project.settings.speed_variance
         self.speed_thread.start()
 
     def on_speed_finished(self, idx):
-        self.speed_thread.quit()
-        self.speed_thread.wait()
+        self.speed_gen_count += 1
         self.speed_pop.set_ship(idx) 
         self.speed_pop.refresh_table()
-        self.redraw_map()
-        self.check_sim_ready()
-        QMessageBox.information(self, "Done", "Speed & Duration Calculated (WGS84).")
+        
+        if self.speed_gen_count >= self.speed_gen_total:
+            self.speed_thread.quit()
+            self.speed_thread.wait()
+            self.redraw_map()
+            self.check_sim_ready()
+            QMessageBox.information(self, "Done", "Speed & Duration Calculated (WGS84).")
 
     # def open_sim_panel(self):
     #     if not self.sim_win:

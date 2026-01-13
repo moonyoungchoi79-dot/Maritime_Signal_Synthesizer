@@ -139,17 +139,17 @@ class SimulationWorker(QObject):
                 current_positions = {}
                 
                 own_state = None
-                if own_ship:
+                if own_ship and own_ship.is_generated:
                       own_state = self.get_state_at_step(own_ship, m)
                       px, py = coords_to_pixel(own_state['lat_deg'], own_state['lon_deg'], mi)
                       current_positions[own_idx] = (px, py, own_state['heading_true_deg'])
 
-                if own_ship and own_state:
-                    for tgt in self.active_ships:
-                        if tgt.idx == own_idx: continue 
-                        tgt_state = self.get_state_at_step(tgt, m)
-                        px, py = coords_to_pixel(tgt_state['lat_deg'], tgt_state['lon_deg'], mi)
-                        current_positions[tgt.idx] = (px, py, tgt_state['heading_true_deg'])
+                for tgt in self.active_ships:
+                    if tgt.idx == own_idx: continue 
+                    tgt_state = self.get_state_at_step(tgt, m)
+                    px, py = coords_to_pixel(tgt_state['lat_deg'], tgt_state['lon_deg'], mi)
+                    current_positions[tgt.idx] = (px, py, tgt_state['heading_true_deg'])
+                    if own_ship and own_state:
                         self.generate_ais_radar_group(own_ship, tgt, tgt_state, ts_val)
                 
                 current_real_time = time.time()
@@ -248,7 +248,7 @@ class SimulationWorker(QObject):
                 # Check if target ship is in area
                 ship = self.proj.get_ship_by_idx(evt.target_ship_idx)
                 area = self.proj.get_area_by_id(int(evt.condition_value))
-                if ship and area:
+                if ship and area and ship.is_generated:
                     # Get current position (either dynamic or static)
                     state = self.get_state_at_step(ship, self.m) # This handles dynamic check internally
                     px, py = coords_to_pixel(state['lat_deg'], state['lon_deg'], self.proj.map_info)
@@ -259,7 +259,7 @@ class SimulationWorker(QObject):
                 # Check if target ship is OUTSIDE area
                 ship = self.proj.get_ship_by_idx(evt.target_ship_idx)
                 area = self.proj.get_area_by_id(int(evt.condition_value))
-                if ship and area:
+                if ship and area and ship.is_generated:
                     state = self.get_state_at_step(ship, self.m)
                     px, py = coords_to_pixel(state['lat_deg'], state['lon_deg'], self.proj.map_info)
                     poly = QPolygonF([QPointF(x,y) for x,y in area.geometry])
@@ -275,7 +275,7 @@ class SimulationWorker(QObject):
                 
                 ref_ship = self.proj.get_ship_by_idx(ref_idx)
                 
-                if target_ship and ref_ship:
+                if target_ship and ref_ship and target_ship.is_generated and ref_ship.is_generated:
                     tgt_state = self.get_state_at_step(target_ship, self.m)
                     ref_state = self.get_state_at_step(ref_ship, self.m)
                     
@@ -418,6 +418,11 @@ class SimulationWorker(QObject):
         # Use cached numpy array if available, otherwise fallback (and cache)
         times = self.cached_times.get(ship.idx)
         if times is None:
+             if not ship.cumulative_time:
+                 return {
+                    "lat_deg": 0.0, "lon_deg": 0.0, "sog_knots": 0.0, "sog_kmh": 0.0, "sog_mps": 0.0,
+                    "cog_true_deg": 0.0, "heading_true_deg": 0.0, "elapsed_sec": t_current
+                 }
              times = np.array(ship.cumulative_time)
              self.cached_times[ship.idx] = times
              

@@ -235,7 +235,15 @@ class EventScriptPanel(QWidget):
 
     def add_event(self):
         eid = str(uuid.uuid4())
-        evt = EventTrigger(id=eid, name="New Event", enabled=False)
+        base_name = "New Event"
+        name = base_name
+        count = 1
+        existing_names = {e.name for e in current_project.events}
+        while name in existing_names:
+            name = f"{base_name} {count}"
+            count += 1
+            
+        evt = EventTrigger(id=eid, name=name, enabled=False)
         current_project.events.append(evt)
         self.refresh_table()
         # Select new
@@ -248,10 +256,18 @@ class EventScriptPanel(QWidget):
         original_evt = next((e for e in current_project.events if e.id == eid), None)
         if not original_evt: return
         
+        base_name = f"{original_evt.name} (Copy)"
+        name = base_name
+        count = 1
+        existing_names = {e.name for e in current_project.events}
+        while name in existing_names:
+            name = f"{base_name} {count}"
+            count += 1
+        
         new_id = str(uuid.uuid4())
         new_evt = EventTrigger(
             id=new_id,
-            name=f"{original_evt.name} (Copy)",
+            name=name,
             enabled=False,
             trigger_type=original_evt.trigger_type,
             condition_value=original_evt.condition_value,
