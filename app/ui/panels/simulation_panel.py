@@ -9,7 +9,7 @@ import numpy as np
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, 
     QTextEdit, QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox, QTableWidget, 
-    QHeaderView, QGroupBox, QMessageBox, QFileDialog, QDialog, QGraphicsScene, 
+    QHeaderView, QGroupBox, QMessageBox, QFileDialog, QDialog, QGraphicsScene, QListWidget,
     QGraphicsItem, QGraphicsPathItem, QGraphicsPolygonItem, QGraphicsEllipseItem, 
     QGraphicsTextItem, QAbstractSpinBox
 )
@@ -28,6 +28,7 @@ from app.core.nmea import parse_nmea_fields
 from app.workers.simulation_workor import SimulationWorker
 from app.ui.map.sim_map_view import SimMapView
 from app.ui.dialogs.rtg_dialog import RTGDialog
+import app.core.state as app_state
 
 class SimulationPanel(QWidget):
     state_changed = pyqtSignal(str)
@@ -187,6 +188,15 @@ class SimulationPanel(QWidget):
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
         
+        self.status_group = QGroupBox("Simulation Status")
+        status_layout = QVBoxLayout(self.status_group)
+        self.lbl_active_scen = QLabel("Active Scenario: None")
+        self.list_active_events = QListWidget()
+        self.list_active_events.setFixedHeight(80)
+        status_layout.addWidget(self.lbl_active_scen)
+        status_layout.addWidget(self.list_active_events)
+        right_layout.addWidget(self.status_group)
+
         self.on_off_group = QGroupBox("Signal On/Off")
         on_off_layout = QVBoxLayout(self.on_off_group)
         self.on_off_table = self.create_signal_on_off_table()
@@ -1185,6 +1195,10 @@ class SimulationPanel(QWidget):
                         s_name = ship.name if ship else "Unknown"
                         events_list.append(f"[Scen] {e.name} (Tgt: {s_name})")
                         
+        self.lbl_active_scen.setText(f"Active Scenario: {scen_name}")
+        self.list_active_events.clear()
+        self.list_active_events.addItems(events_list)
+
         self.simulation_status_updated.emit(scen_name, events_list)
 
     def on_export_data(self, ready):
