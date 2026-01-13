@@ -27,6 +27,7 @@ from app.core.nmea import parse_nmea_fields
 from app.ui.map.sim_map_view import SimMapView
 from app.workers.simulation_workor import SimulationWorker
 from app.ui.dialogs.rtg_dialog import RTGDialog
+import app.core.state as app_state
 
 class SimulationWindow(QWidget):
     state_changed = pyqtSignal(str)
@@ -1170,6 +1171,43 @@ class SimulationWindow(QWidget):
              rem_parts.append(f"{s}s")
              eta_str = " ".join(rem_parts)
         
+        # --- Enabled Events & Scenario Info ---
+        enabled_events_list = []
+        # 1. Project Events
+        for e in current_project.events:
+            if e.enabled and e.target_ship_idx == idx:
+                enabled_events_list.append(f"[Proj] {e.name}")
+        
+        # 2. Scenario Events
+        active_scenarios = []
+        if app_state.current_scenario and app_state.current_scenario.enabled:
+            scen = app_state.current_scenario
+            active_scenarios.append(scen.name)
+            
+            for e in scen.events:
+                if e.enabled:
+                    # Scope Check
+                    should_apply = False
+                    if scen.scope_mode == "ALL_SHIPS": should_apply = True
+                    elif scen.scope_mode == "OWN_ONLY":
+                        if e.target_ship_idx == current_project.settings.own_ship_idx: should_apply = True
+                    elif scen.scope_mode == "TARGET_ONLY":
+                        if e.target_ship_idx != current_project.settings.own_ship_idx: should_apply = True
+                    elif scen.scope_mode == "SELECTED_SHIPS":
+                        if e.target_ship_idx in scen.selected_ships: should_apply = True
+                    
+                    if should_apply and e.target_ship_idx == idx:
+                        enabled_events_list.append(f"[Scen] {e.name}")
+
+        events_str = "<br>".join(enabled_events_list) if enabled_events_list else "None"
+        scen_str = ", ".join(active_scenarios) if active_scenarios else "None"
+        
+        # --- Signal Status ---
+        sig_status = []
+        for k, v in ship.signals_enabled.items():
+            sig_status.append(f"{k}: {'ON' if v else 'OFF'}")
+        sig_str = ", ".join(sig_status)
+
         info = f"""
         <h3>{ship.name} (ID: {ship.idx})</h3>
         <b>MMSI:</b> {ship.mmsi}<br>
@@ -1180,7 +1218,13 @@ class SimulationWindow(QWidget):
         <b>Lon:</b> {state['lon']:.6f}<br>
         <b>Speed:</b> {state['spd']:.1f} kn<br>
         <b>Heading:</b> {state['hdg']:.1f}°<br>
-        <b>Remaining:</b> {eta_str}
+        <b>Remaining:</b> {eta_str}<br>
+        <hr>
+        <b>Active Scenario:</b> {scen_str}<br>
+        <b>Enabled Events:</b><br>
+        {events_str}<br>
+        <hr>
+        <b>Signals:</b> {sig_str}
         """
         
         msg = QMessageBox(self)

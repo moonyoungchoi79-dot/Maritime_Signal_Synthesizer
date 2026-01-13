@@ -95,7 +95,36 @@ class SimulationWorker(QObject):
 
                 # Refresh events list to allow dynamic updates during simulation
                 try:
-                    self.events = [e for e in self.proj.events if e.enabled]
+                    # 1. Project Events
+                    active_events = [e for e in self.proj.events if e.enabled]
+                    
+                    # 2. Scenario Events
+                    from app.core.state import current_scenario
+                    if current_scenario and current_scenario.enabled:
+                        scen = current_scenario
+                        for evt in scen.events:
+                            if not evt.enabled: continue
+                            
+                            # Scope Check
+                            should_apply = False
+                            if scen.scope_mode == "ALL_SHIPS":
+                                should_apply = True
+                            elif scen.scope_mode == "OWN_ONLY":
+                                if evt.target_ship_idx == self.proj.settings.own_ship_idx:
+                                    should_apply = True
+                            elif scen.scope_mode == "TARGET_ONLY":
+                                if evt.target_ship_idx != self.proj.settings.own_ship_idx:
+                                    should_apply = True
+                            elif scen.scope_mode == "SELECTED_SHIPS":
+                                if evt.target_ship_idx in scen.selected_ships:
+                                    should_apply = True
+                                    
+                            if should_apply:
+                                # Dedup: if event with same ID already in active_events, skip
+                                if not any(e.id == evt.id for e in active_events):
+                                    active_events.append(evt)
+                                    
+                    self.events = active_events
                 except:
                     pass # Handle potential list modification during iteration
 
@@ -210,6 +239,7 @@ class SimulationWorker(QObject):
             if evt.id in self.triggered_events: continue
             
             triggered = False
+            log_detail = ""
             if evt.trigger_type == "TIME":
                 if t_current >= evt.condition_value:
                     triggered = True
@@ -235,11 +265,11 @@ class SimulationWorker(QObject):
                     if not poly.containsPoint(QPointF(px, py), Qt.FillRule.OddEvenFill):
                         triggered = True
             elif evt.trigger_type in ["CPA_UNDER", "CPA_OVER", "DIST_UNDER", "DIST_OVER"]:
-                # Check distance between target ship and reference ship
+                # Check distance between target ship and reference ship (Instantaneous Range)
                 target_ship = self.proj.get_ship_by_idx(evt.target_ship_idx)
                 
                 ref_idx = evt.reference_ship_idx
-                if ref_idx == -1 and evt.trigger_type.startswith("CPA"): # Fallback for CPA if not set
+                if ref_idx == -1: # Fallback for CPA if not set
                     ref_idx = self.proj.settings.own_ship_idx
                 
                 ref_ship = self.proj.get_ship_by_idx(ref_idx)
@@ -249,15 +279,31 @@ class SimulationWorker(QObject):
                     ref_state = self.get_state_at_step(ref_ship, self.m)
                     
                     dist_m = haversine_distance(tgt_state['lat_deg'], tgt_state['lon_deg'], ref_state['lat_deg'], ref_state['lon_deg'])
-                    dist_nm = dist_m / 1852.0
                     
-                    if evt.trigger_type in ["CPA_UNDER", "DIST_UNDER"] and dist_nm <= evt.condition_value:
+                    # CPA types use Meters (m), DIST types use Nautical Miles (nm)
+                    if evt.trigger_type in ["CPA_UNDER", "CPA_OVER"]:
+                        val_compare = dist_m
+                        unit_str = "m"
+                    else:
+                        val_compare = dist_m / 1852.0
+                        unit_str = "nm"
+                    
+                    if evt.trigger_type in ["CPA_UNDER", "DIST_UNDER"] and val_compare <= evt.condition_value:
                         triggered = True
-                    elif evt.trigger_type in ["CPA_OVER", "DIST_OVER"] and dist_nm >= evt.condition_value:
+                    elif evt.trigger_type in ["CPA_OVER", "DIST_OVER"] and val_compare >= evt.condition_value:
                         triggered = True
+                        
+                    if triggered:
+                        ts_str = (self.proj.start_time + datetime.timedelta(seconds=t_current)).strftime("%Y-%m-%dT%H:%M:%SZ")
+                        op_str = "<=" if "UNDER" in evt.trigger_type else ">="
+                        log_detail = f"ref={ref_ship.name}, tgt={target_ship.name}, dist={val_compare:.1f}{unit_str} {op_str} {evt.condition_value}{unit_str} @ {ts_str}"
             
             if triggered:
-                self.log_message.emit(f"Event Triggered: {evt.name} ({evt.action_type})")
+                if log_detail:
+                    self.log_message.emit(f"[EVENT] {evt.name} fired: {log_detail}")
+                else:
+                    self.log_message.emit(f"Event Triggered: {evt.name} ({evt.action_type})")
+                    
                 self.event_triggered.emit(evt.name, evt.target_ship_idx)
                 self.triggered_events.add(evt.id)
                 self.apply_event_action(evt, t_current)

@@ -11,4 +11,4 @@ class EventTrigger:
     target_ship_idx: int = 0
     action_value: float = 0.0 # New Speed or New Heading
     is_relative_to_end: bool = False
-    reference_ship_idx: int = -1 # For DIST_UNDER/OVER
+    reference_ship_idx: int = 0 # For DIST_UNDER/OVER

@@ -47,6 +47,7 @@ from app.ui.dialogs.help_dialog import HelpDialog
 from app.ui.panels.speed_panel import SpeedGeneratorPanel
 from app.ui.panels.simulation_panel import SimulationPanel
 from app.ui.panels.event_panel import EventScriptPanel
+from app.ui.panels.scenario_panel import ScenarioPanel
 from app.workers.speed_generator_worker import SpeedGeneratorWorker
 
 class ColoredTabBar(QTabBar):
@@ -99,6 +100,7 @@ class MainWindow(QMainWindow):
         self.sim_panel = SimulationPanel(self)
         self.speed_pop = SpeedGeneratorPanel(self)
         self.event_panel = EventScriptPanel(self)
+        self.scenario_panel = ScenarioPanel(self)
         
         self.speed_pop.request_generate.connect(self.generate_speed_logic)
         
@@ -410,10 +412,11 @@ class MainWindow(QMainWindow):
         
         main_h.addWidget(right_widget, 1)
         
-        self.tabs.addTab(self.map_editor_widget, "Path Editor")
-        self.tabs.addTab(self.speed_pop, "Speed Generator")
-        self.tabs.addTab(self.sim_panel, "Simulator")
-        self.tabs.addTab(self.event_panel, "Event Scripter")
+        self.tabs.addTab(self.map_editor_widget, "Path")
+        self.tabs.addTab(self.speed_pop, "Speed")
+        self.tabs.addTab(self.sim_panel, "Simulation")
+        self.tabs.addTab(self.event_panel, "Event")
+        self.tabs.addTab(self.scenario_panel, "Scenario")
         
         main_v.addWidget(self.tabs)
         
@@ -1323,6 +1326,8 @@ class MainWindow(QMainWindow):
             self.sim_panel.refresh_tables()
         elif w == self.event_panel:
             self.event_panel.refresh_all()
+        elif w == self.scenario_panel:
+            self.scenario_panel.refresh_ui()
 
     def update_sim_tab_state(self, state):
         idx = self.tabs.indexOf(self.sim_panel)
@@ -1351,13 +1356,13 @@ class MainWindow(QMainWindow):
             return QIcon(pix)
         
         if state == "PLAY":
-            self.tabs.setTabText(idx, "   Simulator (Running)")
+            self.tabs.setTabText(idx, "   Simulation (Running)")
             self.tabs.setTabIcon(idx, get_white_icon('play'))
         elif state == "PAUSE":
-            self.tabs.setTabText(idx, "   Simulator (Paused)")
+            self.tabs.setTabText(idx, "   Simulation (Paused)")
             self.tabs.setTabIcon(idx, get_white_icon('pause'))
         elif state == "STOP":
-            self.tabs.setTabText(idx, "   Simulator (Stopped)")
+            self.tabs.setTabText(idx, "   Simulation (Stopped)")
             # Create Red Stop Icon
             pix = QPixmap(16, 16)
             pix.fill(Qt.GlobalColor.transparent)
