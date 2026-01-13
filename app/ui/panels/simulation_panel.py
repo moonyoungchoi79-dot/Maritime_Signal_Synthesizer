@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QTextEdit, QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox, QTableWidget, 
     QHeaderView, QGroupBox, QMessageBox, QFileDialog, QDialog, QGraphicsScene, QListWidget,
     QGraphicsItem, QGraphicsPathItem, QGraphicsPolygonItem, QGraphicsEllipseItem, 
-    QGraphicsTextItem, QAbstractSpinBox, QMenu
+    QGraphicsTextItem, QAbstractSpinBox, QMenu, QGraphicsRectItem, QFormLayout
 )
 from PyQt6.QtCore import (
     Qt, pyqtSignal, QThread, QTimer, QPointF
@@ -29,6 +29,122 @@ from app.workers.simulation_workor import SimulationWorker
 from app.ui.map.sim_map_view import SimMapView
 from app.ui.dialogs.rtg_dialog import RTGDialog
 import app.core.state as app_state
+
+class TargetInfoDialog(QDialog):
+    def __init__(self, parent, ship_idx, worker):
+        super().__init__(parent)
+        self.ship_idx = ship_idx
+        self.worker = worker
+        self.setWindowTitle("Target Detail")
+        self.resize(300, 400)
+        
+        layout = QVBoxLayout(self)
+        self.lbl_info = QLabel()
+        self.lbl_info.setTextFormat(Qt.TextFormat.RichText)
+        layout.addWidget(self.lbl_info)
+        
+        btn_box = QHBoxLayout()
+        self.btn_del = QPushButton("Delete")
+        self.btn_high = QPushButton("Highlight Path")
+        self.btn_close = QPushButton("Close")
+        
+        self.btn_del.clicked.connect(self.accept) # Use accept/reject codes to signal action
+        self.btn_high.clicked.connect(lambda: self.done(2)) # Custom code 2
+        self.btn_close.clicked.connect(self.reject)
+        
+        btn_box.addWidget(self.btn_del)
+        btn_box.addWidget(self.btn_high)
+        btn_box.addWidget(self.btn_close)
+        layout.addLayout(btn_box)
+        
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_info)
+        self.timer.start(500) # Update every 500ms
+        self.update_info()
+
+    def update_info(self):
+        ship = current_project.get_ship_by_idx(self.ship_idx)
+        if not ship:
+            self.lbl_info.setText("Ship not found.")
+            return
+            
+        t_now = 0.0
+        if self.worker and self.worker.running:
+            t_now = self.worker.current_time
+            
+        # Get dynamic state if available
+        state = {'lat':0, 'lon':0, 'spd':0, 'hdg':0}
+        if self.worker and self.ship_idx in self.worker.dynamic_ships:
+            dyn = self.worker.dynamic_ships[self.ship_idx]
+            state = {'lat': dyn['lat'], 'lon': dyn['lon'], 'spd': dyn['spd'], 'hdg': dyn['hdg']}
+        elif self.parent().calculate_ship_state:
+            state = self.parent().calculate_ship_state(ship, t_now)
+            
+        eta_str = "-"
+        if ship.total_duration_sec > 0:
+             remaining = max(0, ship.total_duration_sec - t_now)
+             d = int(remaining // 86400)
+             h = int((remaining % 86400) // 3600)
+             m = int((remaining % 3600) // 60)
+             s = int(remaining % 60)
+             rem_parts = []
+             if d > 0: rem_parts.append(f"{d}d")
+             if h > 0: rem_parts.append(f"{h}h")
+             if m > 0: rem_parts.append(f"{m}m")
+             rem_parts.append(f"{s}s")
+             eta_str = " ".join(rem_parts)
+        
+        enabled_events_list = []
+        for e in current_project.events:
+            if e.enabled and e.target_ship_idx == self.ship_idx:
+                enabled_events_list.append(f"[Proj] {e.name}")
+        
+        active_scenarios = []
+        if app_state.loaded_scenarios:
+            for scen in app_state.loaded_scenarios:
+                if scen.enabled:
+                    active_scenarios.append(scen.name)
+                    for e in scen.events:
+                        if e.enabled:
+                            should_apply = False
+                            if scen.scope_mode == "ALL_SHIPS": should_apply = True
+                            elif scen.scope_mode == "OWN_ONLY":
+                                if e.target_ship_idx == current_project.settings.own_ship_idx: should_apply = True
+                            elif scen.scope_mode == "TARGET_ONLY":
+                                if e.target_ship_idx != current_project.settings.own_ship_idx: should_apply = True
+                            elif scen.scope_mode == "SELECTED_SHIPS":
+                                if e.target_ship_idx in scen.selected_ships: should_apply = True
+                            
+                            if should_apply and e.target_ship_idx == self.ship_idx:
+                                enabled_events_list.append(f"[Scen] {e.name}")
+
+        events_str = "<br>".join(enabled_events_list) if enabled_events_list else "None"
+        scen_str = ", ".join(active_scenarios) if active_scenarios else "None"
+        
+        sig_status = []
+        for k, v in ship.signals_enabled.items():
+            sig_status.append(f"{k}: {'ON' if v else 'OFF'}")
+        sig_str = ", ".join(sig_status)
+
+        info = f"""
+        <h3>{ship.name} (ID: {ship.idx})</h3>
+        <b>MMSI:</b> {ship.mmsi}<br>
+        <b>Type:</b> {'Random Target' if ship.idx >= 1000 else 'Manual Target'}<br>
+        <hr>
+        <b>Sim Time:</b> {t_now:.1f} s<br>
+        <b>Lat:</b> {state['lat']:.6f}<br>
+        <b>Lon:</b> {state['lon']:.6f}<br>
+        <b>Speed:</b> {state['spd']:.1f} kn<br>
+        <b>Heading:</b> {state['hdg']:.1f}°<br>
+        <b>Remaining:</b> {eta_str}<br>
+        <hr>
+        <b>Active Scenario:</b> {scen_str}<br>
+        <b>Enabled Events:</b><br>
+        {events_str}<br>
+        <hr>
+        <b>Signals:</b> {sig_str}
+        """
+        self.lbl_info.setText(info)
 
 class SimulationPanel(QWidget):
     state_changed = pyqtSignal(str)
@@ -48,6 +164,11 @@ class SimulationPanel(QWidget):
         self.data_ready_flag = False
         self.suppress_close_warning = False
         self.blink_timers = {}
+        
+        # Fix for SimMapView right-click crash (MapView expects obj_combo)
+        self.obj_combo = QComboBox(self)
+        self.obj_combo.setVisible(False)
+        
         self.init_ui()
 
     def set_follow_target(self, idx):
@@ -734,6 +855,7 @@ class SimulationPanel(QWidget):
         self.ship_indicators.clear()
         self.trail_items.clear() # Cleared from scene, need to rebuild if trails exist
         self.planned_paths.clear()
+        self.add_boundary_masks()
         self.stop_all_blinks()
         
         scale = self.view.transform().m11()
@@ -928,6 +1050,42 @@ class SimulationPanel(QWidget):
                      inds['ai'].setRotation(heading)
                      inds['ra'].setPos(px, py)
     
+    def add_boundary_masks(self):
+        mi = current_project.map_info
+        scale = mi.pixels_per_degree
+        if scale <= 0: return
+        
+        c = QColor(current_project.settings.mask_color)
+        limit = 1e9
+        
+        # Left of -180
+        r1 = QGraphicsRectItem(-limit, -limit, (-180 * scale) + limit, 2 * limit)
+        r1.setBrush(QBrush(c))
+        r1.setPen(QPen(Qt.PenStyle.NoPen))
+        r1.setZValue(-100)
+        self.scene.addItem(r1)
+        
+        # Right of 180
+        r2 = QGraphicsRectItem(180 * scale, -limit, limit - (180 * scale), 2 * limit)
+        r2.setBrush(QBrush(c))
+        r2.setPen(QPen(Qt.PenStyle.NoPen))
+        r2.setZValue(-100)
+        self.scene.addItem(r2)
+        
+        # Top (Lat > 90 => y < -90*scale)
+        r3 = QGraphicsRectItem(-limit, -limit, 2 * limit, (-90 * scale) + limit)
+        r3.setBrush(QBrush(c))
+        r3.setPen(QPen(Qt.PenStyle.NoPen))
+        r3.setZValue(-100)
+        self.scene.addItem(r3)
+        
+        # Bottom (Lat < -90 => y > 90*scale)
+        r4 = QGraphicsRectItem(-limit, 90 * scale, 2 * limit, limit - (90 * scale))
+        r4.setBrush(QBrush(c))
+        r4.setPen(QPen(Qt.PenStyle.NoPen))
+        r4.setZValue(-100)
+        self.scene.addItem(r4)
+
     def update_performance_display(self, text):
         import re
         match = re.search(r"SPS: (\d+\.\d+)", text)
@@ -1377,57 +1535,15 @@ class SimulationPanel(QWidget):
     def show_target_info(self, idx):
         ship = current_project.get_ship_by_idx(idx)
         if not ship: return
+
+        dlg = TargetInfoDialog(self, idx, self.worker)
+        res = dlg.exec()
         
-        t_now = 0.0
-        if self.worker and self.worker.running:
-            t_now = self.worker.current_time
-            
-        state = self.calculate_ship_state(ship, t_now)
-        
-        eta_str = "-"
-        if ship.total_duration_sec > 0:
-             remaining = max(0, ship.total_duration_sec - t_now)
-             d = int(remaining // 86400)
-             h = int((remaining % 86400) // 3600)
-             m = int((remaining % 3600) // 60)
-             s = int(remaining % 60)
-             
-             rem_parts = []
-             if d > 0: rem_parts.append(f"{d}d")
-             if h > 0: rem_parts.append(f"{h}h")
-             if m > 0: rem_parts.append(f"{m}m")
-             rem_parts.append(f"{s}s")
-             eta_str = " ".join(rem_parts)
-        
-        info = f"""
-        <h3>{ship.name} (ID: {ship.idx})</h3>
-        <b>MMSI:</b> {ship.mmsi}<br>
-        <b>Type:</b> {'Random Target' if ship.idx >= 1000 else 'Manual Target'}<br>
-        <hr>
-        <b>Sim Time:</b> {t_now:.1f} s<br>
-        <b>Lat:</b> {state['lat']:.6f}<br>
-        <b>Lon:</b> {state['lon']:.6f}<br>
-        <b>Speed:</b> {state['spd']:.1f} kn<br>
-        <b>Heading:</b> {state['hdg']:.1f}°<br>
-        <b>Remaining:</b> {eta_str}
-        """
-        
-        msg = QMessageBox(self)
-        msg.setWindowTitle("Target Detail")
-        msg.setText(info)
-        msg.setTextFormat(Qt.TextFormat.RichText)
-        
-        btn_del = msg.addButton("Delete", QMessageBox.ButtonRole.DestructiveRole)
-        btn_high = msg.addButton("Highlight Path", QMessageBox.ButtonRole.ActionRole)
-        msg.addButton(QMessageBox.StandardButton.Close)
-        
-        msg.exec()
-        
-        if msg.clickedButton() == btn_del:
+        if res == QDialog.DialogCode.Accepted: # Delete
             if QMessageBox.question(self, "Delete Target", f"Delete '{ship.name}'?", 
                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
                 self.delete_single_target(idx)
-        elif msg.clickedButton() == btn_high:
+        elif res == 2: # Highlight
             self.highlighted_ship_idx = idx
             self.draw_static_map() # Redraw to apply highlight style
 

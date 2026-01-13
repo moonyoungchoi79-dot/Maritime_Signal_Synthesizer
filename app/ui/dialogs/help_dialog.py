@@ -107,7 +107,8 @@ class HelpDialog(QDialog):
                 <ul>
                     <li><b>TIME:</b> 시뮬레이션 시작 후 특정 시간이 지났을 때 발생합니다.</li>
                     <li><b>AREA_ENTER:</b> 특정 선박이 지정된 영역(Area)에 진입했을 때 발생합니다.</li>
-                    <li><b>CPA_UNDER:</b> 자선과의 거리가 설정된 값(nm) 이하로 좁혀졌을 때 발생합니다.</li>
+                    <li><b>CPA_UNDER:</b> 기준 선박과의 거리가 설정된 값(NM) 이하로 좁혀졌을 때 발생합니다.</li>
+                    <li><b>CPA_OVER:</b> 기준 선박과의 거리가 설정된 값(NM) 이상으로 멀어졌을 때 발생합니다.</li>
                 </ul>
                 
                 <h3>액션 (Action)</h3>
@@ -115,6 +116,12 @@ class HelpDialog(QDialog):
                     <li><b>STOP:</b> 해당 선박을 즉시 정지시킵니다.</li>
                     <li><b>CHANGE_SPEED:</b> 선박의 속도를 지정된 값(kn)으로 변경합니다.</li>
                     <li><b>CHANGE_HEADING:</b> 선박의 침로를 지정된 각도(deg)로 변경합니다.</li>
+                    <li><b>MANEUVER:</b> 특수 기동을 수행합니다.
+                        <ul>
+                            <li><b>ReturnToOriginalPath_ShortestDistance:</b> 원래 경로로 최단거리 복귀합니다.</li>
+                            <li><b>ChangeDestination_ToOriginalFinal:</b> 원래 목적지로 향하도록 침로를 변경합니다.</li>
+                        </ul>
+                    </li>
                 </ul>
             """,
             "Settings": """

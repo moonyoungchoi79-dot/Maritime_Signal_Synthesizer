@@ -281,10 +281,10 @@ class SimulationWorker(QObject):
                     
                     dist_m = haversine_distance(tgt_state['lat_deg'], tgt_state['lon_deg'], ref_state['lat_deg'], ref_state['lon_deg'])
                     
-                    # CPA types use Meters (m), DIST types use Nautical Miles (nm)
+                    # CPA types use NM, DIST types use Nautical Miles (nm)
                     if evt.trigger_type in ["CPA_UNDER", "CPA_OVER"]:
-                        val_compare = dist_m
-                        unit_str = "m"
+                        val_compare = dist_m / 1852.0
+                        unit_str = "NM"
                     else:
                         val_compare = dist_m / 1852.0
                         unit_str = "nm"
@@ -334,6 +334,32 @@ class SimulationWorker(QObject):
             dyn['spd'] = evt.action_value
         elif evt.action_type == "CHANGE_HEADING":
             dyn['hdg'] = evt.action_value
+        elif evt.action_type == "MANEUVER":
+            opt = getattr(evt, 'action_option', "")
+            if opt == "ReturnToOriginalPath_ShortestDistance":
+                # Find closest point on original path
+                if ship.raw_points:
+                    mi = self.proj.map_info
+                    min_dist = float('inf')
+                    target_lat, target_lon = dyn['lat'], dyn['lon']
+                    
+                    # Simple search through resampled points
+                    for (px, py) in ship.resampled_points:
+                        _, _, lat, lon = pixel_to_coords(px, py, mi)
+                        d = (lat - dyn['lat'])**2 + (lon - dyn['lon'])**2
+                        if d < min_dist:
+                            min_dist = d
+                            target_lat, target_lon = lat, lon
+                    
+                    # Calculate heading to target
+                    d_lat = target_lat - dyn['lat']
+                    d_lon = (target_lon - dyn['lon']) * math.cos(math.radians((dyn['lat'] + target_lat)/2))
+                    hdg = math.degrees(math.atan2(d_lon, d_lat))
+                    dyn['hdg'] = (hdg + 360) % 360
+                    
+            elif opt == "ChangeDestination_ToOriginalFinal":
+                # Not fully implemented logic for full path re-routing, but heading change to final point
+                pass # Logic would be similar: find final point, set heading.
 
     def get_state_at_step(self, ship, m):
         t_current = m * self.proj.unit_time

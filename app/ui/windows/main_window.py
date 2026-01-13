@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
     QColorDialog, QInputDialog, QDialog, QDialogButtonBox, QMenuBar, QMenu,
     QToolBar, QStatusBar, QGraphicsView, QGraphicsScene, QGraphicsItem, QGraphicsPathItem, QDockWidget,
     QGraphicsPolygonItem, QGraphicsEllipseItem, QGraphicsTextItem, QAbstractItemView,
-    QAbstractSpinBox, QTextBrowser, QSizePolicy, QDateTimeEdit
+    QAbstractSpinBox, QTextBrowser, QSizePolicy, QDateTimeEdit, QGraphicsRectItem
 )
 from PyQt6.QtCore import (
     Qt, pyqtSignal, QObject, QThread, QTimer, QPoint, QPointF, QRect, QRectF, QSize, QSizeF,
@@ -49,6 +49,7 @@ from app.ui.panels.simulation_panel import SimulationPanel
 from app.ui.panels.event_panel import EventScriptPanel
 from app.ui.panels.scenario_panel import ScenarioPanel
 from app.workers.speed_generator_worker import SpeedGeneratorWorker
+import app.core.state as app_state
 
 class ColoredTabBar(QTabBar):
     def tabSizeHint(self, index):
@@ -674,6 +675,7 @@ class MainWindow(QMainWindow):
 
     def redraw_map(self):
         self.scene.clear()
+        self.add_boundary_masks()
         
         sel_txt = self.obj_combo.currentText()
         sel_id = self.obj_combo.currentData()
@@ -771,6 +773,42 @@ class MainWindow(QMainWindow):
             item.setBrush(QBrush(QColor(st.color)))
             item.setZValue(0)
             self.scene.addItem(item)
+
+    def add_boundary_masks(self):
+        mi = current_project.map_info
+        scale = mi.pixels_per_degree
+        if scale <= 0: return
+        
+        c = QColor(current_project.settings.mask_color)
+        limit = 1e9
+        
+        # Left of -180
+        r1 = QGraphicsRectItem(-limit, -limit, (-180 * scale) + limit, 2 * limit)
+        r1.setBrush(QBrush(c))
+        r1.setPen(QPen(Qt.PenStyle.NoPen))
+        r1.setZValue(-100)
+        self.scene.addItem(r1)
+        
+        # Right of 180
+        r2 = QGraphicsRectItem(180 * scale, -limit, limit - (180 * scale), 2 * limit)
+        r2.setBrush(QBrush(c))
+        r2.setPen(QPen(Qt.PenStyle.NoPen))
+        r2.setZValue(-100)
+        self.scene.addItem(r2)
+        
+        # Top (Lat > 90 => y < -90*scale)
+        r3 = QGraphicsRectItem(-limit, -limit, 2 * limit, (-90 * scale) + limit)
+        r3.setBrush(QBrush(c))
+        r3.setPen(QPen(Qt.PenStyle.NoPen))
+        r3.setZValue(-100)
+        self.scene.addItem(r3)
+        
+        # Bottom (Lat < -90 => y > 90*scale)
+        r4 = QGraphicsRectItem(-limit, 90 * scale, 2 * limit, limit - (90 * scale))
+        r4.setBrush(QBrush(c))
+        r4.setPen(QPen(Qt.PenStyle.NoPen))
+        r4.setZValue(-100)
+        self.scene.addItem(r4)
 
     def add_point_click(self, px, py):
         txt = self.obj_combo.currentText()
@@ -1152,8 +1190,39 @@ class MainWindow(QMainWindow):
                     is_relative_to_end=e_data.get("is_relative_to_end", False),
                     reference_ship_idx=e_data.get("reference_ship_idx", -1)
                 )
+                evt.action_option = e_data.get("action_option", "")
                 p.events.append(evt)
 
+            # Load Scenarios from Project/Scenario folder
+            scen_dir = os.path.join(p.project_path, "Scenario")
+            app_state.loaded_scenarios = []
+            app_state.current_scenario = None
+            if os.path.exists(scen_dir):
+                for fname in os.listdir(scen_dir):
+                    if fname.endswith(".scenario.json") or fname.endswith(".json"):
+                        try:
+                            from app.core.models.scenario import Scenario
+                            scen = Scenario.load_from_file(os.path.join(scen_dir, fname))
+                            app_state.loaded_scenarios.append(scen)
+                            
+                            # Sync events to registry
+                            for s_evt in scen.events:
+                                # Check if exists in project events
+                                existing = next((e for e in p.events if e.id == s_evt.id), None)
+                                if existing:
+                                    # Override with scenario version (as per spec 5.2)
+                                    existing.name = s_evt.name
+                                    existing.enabled = s_evt.enabled
+                                    existing.trigger_type = s_evt.trigger_type
+                                    existing.condition_value = s_evt.condition_value
+                                    existing.action_type = s_evt.action_type
+                                    existing.target_ship_idx = s_evt.target_ship_idx
+                                    existing.reference_ship_idx = s_evt.reference_ship_idx
+                                    existing.action_value = s_evt.action_value
+                                    existing.is_relative_to_end = s_evt.is_relative_to_end
+                                    existing.action_option = getattr(s_evt, 'action_option', "")
+                        except: pass
+            
             self.update_ui_state(True)
             self.update_info_strip()
             self.update_obj_combo()
@@ -1175,6 +1244,10 @@ class MainWindow(QMainWindow):
         p = current_project
         if not p.project_path: return
         
+        # Create folders
+        os.makedirs(os.path.join(p.project_path, "Object"), exist_ok=True)
+        os.makedirs(os.path.join(p.project_path, "Scenario"), exist_ok=True)
+        
         ships_list = []
         for s in p.ships:
             control_points = []
@@ -1194,6 +1267,13 @@ class MainWindow(QMainWindow):
                 "note": s.note,
                 "control_points": control_points
             })
+            
+            # Save individual ship file
+            ship_fname = f"Ship_{s.idx}.json"
+            with open(os.path.join(p.project_path, "Object", ship_fname), 'w', encoding='utf-8') as f:
+                json.dump(ships_list[-1], f, indent=4)
+
+        # Save Areas individually
 
         areas_list = []
         for a in p.areas:
@@ -1209,6 +1289,10 @@ class MainWindow(QMainWindow):
                 "note": a.note,
                 "polygon_points": poly_pts
             })
+            
+            area_fname = f"Area_{a.id}.json"
+            with open(os.path.join(p.project_path, "Object", area_fname), 'w', encoding='utf-8') as f:
+                json.dump(areas_list[-1], f, indent=4)
 
         events_list = []
         for e in p.events:
@@ -1222,8 +1306,19 @@ class MainWindow(QMainWindow):
                 "target_ship_idx": e.target_ship_idx,
                 "action_value": e.action_value,
                 "is_relative_to_end": e.is_relative_to_end,
-                "reference_ship_idx": e.reference_ship_idx
+                "reference_ship_idx": e.reference_ship_idx,
+                "action_option": getattr(e, 'action_option', "")
             })
+            
+        # Save events_library.json
+        with open(os.path.join(p.project_path, "events_library.json"), 'w', encoding='utf-8') as f:
+            json.dump(events_list, f, indent=4)
+            
+        # Save Scenarios
+        if app_state.loaded_scenarios:
+            for scen in app_state.loaded_scenarios:
+                fname = sanitize_filename(scen.name) + ".scenario.json"
+                scen.save_to_file(os.path.join(p.project_path, "Scenario", fname))
 
         data = {
             "name": p.project_name,
@@ -1253,9 +1348,10 @@ class MainWindow(QMainWindow):
                 "dropout_probs": p.settings.dropout_probs,
                 "theme_mode": p.settings.theme_mode
             },
-            "ships": ships_list,
-            "areas": areas_list,
-            "events": events_list
+            # Minimal info in project.json, full data in subfolders/files
+            "ships": ships_list, # Keeping for backward compat or easy loading
+            "areas": areas_list, # Keeping for backward compat
+            "events": events_list # Keeping for backward compat
         }
         
         fname = f"{sanitize_filename(p.project_name)}.json"

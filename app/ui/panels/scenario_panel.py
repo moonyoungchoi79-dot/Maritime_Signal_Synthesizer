@@ -2,6 +2,7 @@ import os
 import uuid
 import copy
 import re
+from app.core.utils import sanitize_filename
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, 
     QComboBox, QListWidget, QListWidgetItem, QGroupBox, QFormLayout, 
@@ -168,8 +169,11 @@ class ScenarioPanel(QWidget):
         self.combo_area = QComboBox()
         
         self.combo_action = QComboBox()
-        self.combo_action.addItems(["STOP", "CHANGE_SPEED", "CHANGE_HEADING"])
+        self.combo_action.addItems(["STOP", "CHANGE_SPEED", "CHANGE_HEADING", "MANEUVER"])
         self.combo_action.currentIndexChanged.connect(self.update_editor_ui_state)
+        
+        self.combo_action_option = QComboBox()
+        self.combo_action_option.addItems(["ReturnToOriginalPath_ShortestDistance", "ChangeDestination_ToOriginalFinal"])
         
         self.combo_target = QComboBox()
         
@@ -202,6 +206,7 @@ class ScenarioPanel(QWidget):
         form.addRow("Ref Ship:", self.combo_ref)
         form.addRow("Area:", self.combo_area)
         form.addRow("Action Type:", self.combo_action)
+        form.addRow("Action Option:", self.combo_action_option)
         form.addRow("Target Ship:", self.combo_target)
         form.addRow(self.lbl_act_val, self.spin_action_val)
         
@@ -218,6 +223,7 @@ class ScenarioPanel(QWidget):
         self.combo_ref.currentIndexChanged.connect(self.mark_dirty)
         self.combo_area.currentIndexChanged.connect(self.mark_dirty)
         self.combo_action.currentIndexChanged.connect(self.mark_dirty)
+        self.combo_action_option.currentIndexChanged.connect(self.mark_dirty)
         self.combo_target.currentIndexChanged.connect(self.mark_dirty)
         self.spin_action_val.valueChanged.connect(self.mark_dirty)
         
@@ -385,6 +391,7 @@ class ScenarioPanel(QWidget):
         # But if we want independence, maybe new ID?
         # Let's keep ID for now to allow dedup logic in worker.
         new_evt = copy.deepcopy(orig)
+        if not hasattr(new_evt, 'action_option'): new_evt.action_option = ""
         app_state.current_scenario.events.append(new_evt)
         self.refresh_ui()
 
@@ -413,6 +420,7 @@ class ScenarioPanel(QWidget):
         
         orig_evt = app_state.current_scenario.events[row]
         new_evt = copy.deepcopy(orig_evt)
+        if not hasattr(new_evt, 'action_option'): new_evt.action_option = ""
         new_evt.id = str(uuid.uuid4())
         
         base_name = orig_evt.name
@@ -438,6 +446,12 @@ class ScenarioPanel(QWidget):
         if row < 0: return
         is_checked = (item.checkState() == Qt.CheckState.Checked)
         app_state.current_scenario.events[row].enabled = is_checked
+        
+        # Sync with Project Events (Single Source of Truth)
+        eid = app_state.current_scenario.events[row].id
+        proj_evt = next((e for e in current_project.events if e.id == eid), None)
+        if proj_evt:
+            proj_evt.enabled = is_checked
 
     def on_scen_list_reordered(self, parent, start, end, destination, row):
         if not app_state.current_scenario: return
@@ -550,7 +564,11 @@ class ScenarioPanel(QWidget):
 
     def save_scenario_as(self):
         if not app_state.current_scenario: return
-        path, _ = QFileDialog.getSaveFileName(self, "Save Scenario As", "", "Scenario Files (*.json)")
+        
+        default_name = sanitize_filename(app_state.current_scenario.name) + ".scenario.json"
+        default_path = os.path.join(current_project.project_path, "Scenario", default_name)
+        
+        path, _ = QFileDialog.getSaveFileName(self, "Save Scenario As", default_path, "Scenario Files (*.scenario.json *.json)")
         if path:
             self.current_filepath = path
             self.save_scenario()
@@ -622,6 +640,10 @@ class ScenarioPanel(QWidget):
             
         self.combo_action.setCurrentText(evt.action_type)
         
+        if hasattr(evt, 'action_option') and evt.action_option:
+            idx = self.combo_action_option.findText(evt.action_option)
+            if idx >= 0: self.combo_action_option.setCurrentIndex(idx)
+        
         idx = self.combo_target.findData(evt.target_ship_idx)
         if idx >= 0: self.combo_target.setCurrentIndex(idx)
         
@@ -646,8 +668,8 @@ class ScenarioPanel(QWidget):
             self.set_row_visible(self.spin_cpa, True)
             self.set_row_visible(self.combo_area, False)
             self.set_row_visible(self.combo_ref, True)
-            self.spin_cpa.setSuffix(" m")
-            self.spin_cpa.setRange(0, 50000)
+            self.spin_cpa.setSuffix(" NM")
+            self.spin_cpa.setRange(0, 1000)
         elif trig in ["DIST_UNDER", "DIST_OVER"]:
             self.set_row_visible(self.combo_time_ref, False)
             self.set_row_visible(self.time_input, False)
@@ -667,14 +689,21 @@ class ScenarioPanel(QWidget):
         if act == "STOP":
             self.lbl_act_val.setVisible(False)
             self.spin_action_val.setVisible(False)
+            self.set_row_visible(self.combo_action_option, False)
         elif act == "CHANGE_SPEED":
             self.lbl_act_val.setText("New Speed (kn):")
             self.lbl_act_val.setVisible(True)
             self.spin_action_val.setVisible(True)
+            self.set_row_visible(self.combo_action_option, False)
         elif act == "CHANGE_HEADING":
             self.lbl_act_val.setText("New Heading (deg):")
             self.lbl_act_val.setVisible(True)
             self.spin_action_val.setVisible(True)
+            self.set_row_visible(self.combo_action_option, False)
+        elif act == "MANEUVER":
+            self.lbl_act_val.setVisible(False)
+            self.spin_action_val.setVisible(False)
+            self.set_row_visible(self.combo_action_option, True)
 
     def set_row_visible(self, widget, visible):
         widget.setVisible(visible)
@@ -709,6 +738,7 @@ class ScenarioPanel(QWidget):
             evt.condition_value = self.combo_area.currentData()
             
         evt.action_type = self.combo_action.currentText()
+        evt.action_option = self.combo_action_option.currentText()
         evt.target_ship_idx = self.combo_target.currentData()
         evt.reference_ship_idx = self.combo_ref.currentData()
         evt.action_value = self.spin_action_val.value()
@@ -720,6 +750,21 @@ class ScenarioPanel(QWidget):
             item.setCheckState(Qt.CheckState.Checked if evt.enabled else Qt.CheckState.Unchecked)
         self.list_scen_events.blockSignals(False)
         
+        # Sync with Project Events (Single Source of Truth)
+        proj_evt = next((e for e in current_project.events if e.id == evt.id), None)
+        if proj_evt:
+            proj_evt.name = evt.name
+            proj_evt.enabled = evt.enabled
+            proj_evt.trigger_type = evt.trigger_type
+            proj_evt.condition_value = evt.condition_value
+            proj_evt.action_type = evt.action_type
+            proj_evt.target_ship_idx = evt.target_ship_idx
+            proj_evt.reference_ship_idx = evt.reference_ship_idx
+            proj_evt.action_value = evt.action_value
+            proj_evt.is_relative_to_end = evt.is_relative_to_end
+            if hasattr(evt, 'action_option'):
+                proj_evt.action_option = evt.action_option
+
         self.is_dirty = False
         self.editor_group.setTitle("Selected Event Details")
 
