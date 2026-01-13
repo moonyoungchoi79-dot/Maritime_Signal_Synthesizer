@@ -163,8 +163,8 @@ class ScenarioPanel(QWidget):
         self.time_input = TimeInputWidget()
         
         self.spin_cpa = QDoubleSpinBox()
-        self.spin_cpa.setRange(0, 50000)
-        self.spin_cpa.setSuffix(" m")
+        self.spin_cpa.setRange(0, 10000000)
+        self.spin_cpa.setSuffix(" NM")
         
         self.combo_ref = QComboBox()
         self.combo_area = QComboBox()
@@ -672,7 +672,7 @@ class ScenarioPanel(QWidget):
             self.set_row_visible(self.combo_area, False)
             self.set_row_visible(self.combo_ref, True)
             self.spin_cpa.setSuffix(" NM")
-            self.spin_cpa.setRange(0, 1000)
+            self.spin_cpa.setRange(0, 10000000)
         elif trig in ["DIST_UNDER", "DIST_OVER"]:
             self.set_row_visible(self.combo_time_ref, False)
             self.set_row_visible(self.time_input, False)

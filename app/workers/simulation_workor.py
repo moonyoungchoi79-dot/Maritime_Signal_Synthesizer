@@ -358,7 +358,7 @@ class SimulationWorker(QObject):
                         mid_lat = (dyn['lat'] + target_lat) / 2.0
                         d_lon = (target_lon - dyn['lon']) * math.cos(math.radians(mid_lat))
                         
-                        if abs(d_lat) > 1e-9 or abs(d_lon) > 1e-9:
+                        if abs(d_lat) > 1e-7 or abs(d_lon) > 1e-7:
                             hdg = math.degrees(math.atan2(d_lon, d_lat))
                             dyn['hdg'] = (hdg + 360) % 360
                     
@@ -374,7 +374,7 @@ class SimulationWorker(QObject):
                     mid_lat = (dyn['lat'] + target_lat) / 2.0
                     d_lon = (target_lon - dyn['lon']) * math.cos(math.radians(mid_lat))
                     
-                    if abs(d_lat) > 1e-9 or abs(d_lon) > 1e-9:
+                    if abs(d_lat) > 1e-7 or abs(d_lon) > 1e-7:
                         hdg = math.degrees(math.atan2(d_lon, d_lat))
                         dyn['hdg'] = (hdg + 360) % 360
 

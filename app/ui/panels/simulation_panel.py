@@ -259,6 +259,11 @@ class SimulationPanel(QWidget):
         self.chk_show_paths.toggled.connect(self.draw_static_map)
         top_layout.addWidget(self.chk_show_paths)
         
+        # Capture
+        self.btn_capture = QPushButton("Capture")
+        self.btn_capture.clicked.connect(self.action_capture)
+        top_layout.addWidget(self.btn_capture)
+        
         # Start/Pause/Stop
         self.btn_start = QPushButton("Start")
         self.btn_pause = QPushButton("Pause")
@@ -312,9 +317,16 @@ class SimulationPanel(QWidget):
         self.status_group = QGroupBox("Simulation Status")
         status_layout = QVBoxLayout(self.status_group)
         self.lbl_active_scen = QLabel("Active Scenario: None")
+        
+        self.edit_status_filter = QLineEdit()
+        self.edit_status_filter.setPlaceholderText("Filter events...")
+        self.edit_status_filter.textChanged.connect(self.emit_simulation_status)
+        
         self.list_active_events = QListWidget()
         self.list_active_events.setFixedHeight(80)
+        self.list_active_events.itemDoubleClicked.connect(self.on_event_list_double_clicked)
         status_layout.addWidget(self.lbl_active_scen)
+        status_layout.addWidget(self.edit_status_filter)
         status_layout.addWidget(self.list_active_events)
         right_layout.addWidget(self.status_group)
 
@@ -1188,6 +1200,16 @@ class SimulationPanel(QWidget):
         self.set_ui_locked(True)
         self.data_ready_flag = False
 
+    def action_capture(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Save Map Capture", "", "PNG Image (*.png);;JPEG Image (*.jpg)")
+        if not path: return
+        
+        pixmap = self.view.grab()
+        if pixmap.save(path):
+            QMessageBox.information(self, "Saved", f"Map captured to {os.path.basename(path)}")
+        else:
+            QMessageBox.warning(self, "Error", "Failed to save image.")
+
     def action_pause(self):
         if self.worker:
             self.worker.pause()
@@ -1398,10 +1420,34 @@ class SimulationPanel(QWidget):
                         
         scen_text = ", ".join(active_scen_names) if active_scen_names else "None"
         self.lbl_active_scen.setText(f"Active Scenario: {scen_text}")
+        
+        filter_text = self.edit_status_filter.text().lower()
+        filtered_events = [e for e in events_list if filter_text in e.lower()]
+        
         self.list_active_events.clear()
-        self.list_active_events.addItems(events_list)
+        self.list_active_events.addItems(filtered_events)
 
         self.simulation_status_updated.emit(scen_text, events_list)
+
+    def on_event_list_double_clicked(self, item):
+        text = item.text()
+        # Extract target ship name from string like "[Proj] EventName (Tgt: ShipName)"
+        match = re.search(r"\(Tgt: (.*)\)", text)
+        if match:
+            ship_name = match.group(1)
+            target_ship = next((s for s in current_project.ships if s.name == ship_name), None)
+            
+            if target_ship:
+                # Try to get position from current visual items first (most accurate for display)
+                if target_ship.idx in self.ship_items:
+                    item = self.ship_items[target_ship.idx]
+                    self.view.centerOn(item.pos())
+                    return
+
+                # Fallback if not currently visible/simulated
+                mi = current_project.map_info
+                px, py = coords_to_pixel(target_ship.raw_points[0][0], target_ship.raw_points[0][1], mi) if target_ship.raw_points else (0, 0)
+                self.view.centerOn(px, py)
 
     def on_export_data(self, ready):
         self.data_ready_flag = ready
