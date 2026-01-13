@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QTextEdit, QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox, QTableWidget, 
     QHeaderView, QGroupBox, QMessageBox, QFileDialog, QDialog, QGraphicsScene, QListWidget,
     QGraphicsItem, QGraphicsPathItem, QGraphicsPolygonItem, QGraphicsEllipseItem, 
-    QGraphicsTextItem, QAbstractSpinBox
+    QGraphicsTextItem, QAbstractSpinBox, QMenu
 )
 from PyQt6.QtCore import (
     Qt, pyqtSignal, QThread, QTimer, QPointF
@@ -232,6 +232,8 @@ class SimulationPanel(QWidget):
         self.log_list = QTextEdit()
         self.log_list.setReadOnly(True)
         self.log_list.document().setMaximumBlockCount(1000)
+        self.log_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.log_list.customContextMenuRequested.connect(self.show_log_context_menu)
         log_layout.addWidget(self.log_list)
 
         right_layout.addWidget(log_group, 1)
@@ -1081,6 +1083,26 @@ class SimulationPanel(QWidget):
             self.log_list.append(text)
             sb = self.log_list.verticalScrollBar()
             sb.setValue(sb.maximum())
+
+    def show_log_context_menu(self, pos):
+        menu = QMenu(self)
+        
+        has_selection = bool(self.log_list.textCursor().hasSelection())
+        
+        action_copy = menu.addAction("Copy")
+        action_copy.setEnabled(has_selection)
+        action_copy.triggered.connect(self.log_list.copy)
+        
+        menu.addSeparator()
+        
+        action_select_all = menu.addAction("Select All")
+        action_select_all.triggered.connect(self.log_list.selectAll)
+        
+        menu.addSeparator()
+        action_clear = menu.addAction("Clear")
+        action_clear.triggered.connect(self.log_list.clear)
+        
+        menu.exec(self.log_list.mapToGlobal(pos))
             
     def update_positions(self, pos_dict):
         # Update Trails
@@ -1185,7 +1207,7 @@ class SimulationPanel(QWidget):
         self.scene.update()
 
     def emit_simulation_status(self):
-        scen_name = "None"
+        active_scen_names = []
         events_list = []
         
         # Project Events
@@ -1196,31 +1218,32 @@ class SimulationPanel(QWidget):
                 events_list.append(f"[Proj] {e.name} (Tgt: {s_name})")
         
         # Scenario Events
-        if app_state.current_scenario and app_state.current_scenario.enabled:
-            scen = app_state.current_scenario
-            scen_name = scen.name
-            
-            for e in scen.events:
-                if e.enabled:
-                    should_apply = False
-                    if scen.scope_mode == "ALL_SHIPS": should_apply = True
-                    elif scen.scope_mode == "OWN_ONLY":
-                        if e.target_ship_idx == current_project.settings.own_ship_idx: should_apply = True
-                    elif scen.scope_mode == "TARGET_ONLY":
-                        if e.target_ship_idx != current_project.settings.own_ship_idx: should_apply = True
-                    elif scen.scope_mode == "SELECTED_SHIPS":
-                        if e.target_ship_idx in scen.selected_ships: should_apply = True
-                    
-                    if should_apply:
-                        ship = current_project.get_ship_by_idx(e.target_ship_idx)
-                        s_name = ship.name if ship else "Unknown"
-                        events_list.append(f"[Scen] {e.name} (Tgt: {s_name})")
+        if app_state.loaded_scenarios:
+            for scen in app_state.loaded_scenarios:
+                if scen.enabled:
+                    active_scen_names.append(scen.name)
+                    for e in scen.events:
+                        if e.enabled:
+                            should_apply = False
+                            if scen.scope_mode == "ALL_SHIPS": should_apply = True
+                            elif scen.scope_mode == "OWN_ONLY":
+                                if e.target_ship_idx == current_project.settings.own_ship_idx: should_apply = True
+                            elif scen.scope_mode == "TARGET_ONLY":
+                                if e.target_ship_idx != current_project.settings.own_ship_idx: should_apply = True
+                            elif scen.scope_mode == "SELECTED_SHIPS":
+                                if e.target_ship_idx in scen.selected_ships: should_apply = True
+                            
+                            if should_apply:
+                                ship = current_project.get_ship_by_idx(e.target_ship_idx)
+                                s_name = ship.name if ship else "Unknown"
+                                events_list.append(f"[Scen] {e.name} (Tgt: {s_name})")
                         
-        self.lbl_active_scen.setText(f"Active Scenario: {scen_name}")
+        scen_text = ", ".join(active_scen_names) if active_scen_names else "None"
+        self.lbl_active_scen.setText(f"Active Scenario: {scen_text}")
         self.list_active_events.clear()
         self.list_active_events.addItems(events_list)
 
-        self.simulation_status_updated.emit(scen_name, events_list)
+        self.simulation_status_updated.emit(scen_text, events_list)
 
     def on_export_data(self, ready):
         self.data_ready_flag = ready

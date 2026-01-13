@@ -5,7 +5,7 @@ import re
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, 
     QComboBox, QListWidget, QListWidgetItem, QGroupBox, QFormLayout, 
-    QFileDialog, QMessageBox, QCheckBox, QAbstractItemView, QDoubleSpinBox, QSpinBox
+    QFileDialog, QMessageBox, QCheckBox, QAbstractItemView, QDoubleSpinBox, QSpinBox, QMenu
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QBrush, QColor
@@ -20,8 +20,8 @@ class ScenarioPanel(QWidget):
         super().__init__(parent)
         
         # Initialize global state if None
-        if app_state.current_scenario is None:
-            app_state.current_scenario = Scenario()
+        if not app_state.loaded_scenarios:
+            app_state.loaded_scenarios = []
             
         self.is_dirty = False
         self.loading_event = False
@@ -31,25 +31,51 @@ class ScenarioPanel(QWidget):
         self.refresh_ui()
 
     def init_ui(self):
-        layout = QVBoxLayout(self)
+        main_layout = QHBoxLayout(self)
         
-        # 1. File Management
-        file_box = QHBoxLayout()
-        self.btn_new = QPushButton("New Scenario")
-        self.btn_open = QPushButton("Open Scenario")
-        self.btn_save = QPushButton("Save Scenario")
-        self.btn_save_as = QPushButton("Save As...")
+        # --- Left Panel: Scenario List ---
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        
+        left_layout.addWidget(QLabel("Loaded Scenarios"))
+        self.list_scenarios = QListWidget()
+        self.list_scenarios.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.list_scenarios.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.list_scenarios.customContextMenuRequested.connect(self.show_scenario_list_context_menu)
+        self.list_scenarios.itemSelectionChanged.connect(self.on_scenario_selected_in_list)
+        self.list_scenarios.itemChanged.connect(self.on_scenario_list_item_changed)
+        left_layout.addWidget(self.list_scenarios)
+        
+        btn_box = QHBoxLayout()
+        self.btn_new = QPushButton("New")
+        self.btn_open = QPushButton("Open")
+        self.btn_remove_scen = QPushButton("Remove")
         
         self.btn_new.clicked.connect(self.new_scenario)
         self.btn_open.clicked.connect(self.open_scenario)
-        self.btn_save.clicked.connect(self.save_scenario)
-        self.btn_save_as.clicked.connect(self.save_scenario_as)
+        self.btn_remove_scen.clicked.connect(self.remove_scenario)
         
-        file_box.addWidget(self.btn_new)
-        file_box.addWidget(self.btn_open)
+        btn_box.addWidget(self.btn_new)
+        btn_box.addWidget(self.btn_open)
+        btn_box.addWidget(self.btn_remove_scen)
+        left_layout.addLayout(btn_box)
+        
+        main_layout.addWidget(left_widget, 1)
+        
+        # --- Right Panel: Scenario Editor ---
+        right_widget = QWidget()
+        self.right_layout = QVBoxLayout(right_widget)
+        
+        # 1. File Management
+        file_box = QHBoxLayout()
+        self.btn_save = QPushButton("Save Selected Scenario")
+        self.btn_save_as = QPushButton("Save As...")
+        
         file_box.addWidget(self.btn_save)
         file_box.addWidget(self.btn_save_as)
-        layout.addLayout(file_box)
+        self.btn_save.clicked.connect(self.save_scenario)
+        self.btn_save_as.clicked.connect(self.save_scenario_as)
+        self.right_layout.addLayout(file_box)
         
         # 2. Meta Data
         meta_group = QGroupBox("Scenario Metadata")
@@ -74,7 +100,7 @@ class ScenarioPanel(QWidget):
         meta_layout.addRow("Scope Mode:", self.combo_scope)
         meta_layout.addRow("Select Ships:", self.list_scope_ships)
         
-        layout.addWidget(meta_group)
+        self.right_layout.addWidget(meta_group)
         
         # 3. Event Composition
         event_group = QGroupBox("Event Composition")
@@ -114,7 +140,7 @@ class ScenarioPanel(QWidget):
         
         event_layout.addLayout(v2)
         
-        layout.addWidget(event_group)
+        self.right_layout.addWidget(event_group)
         
         # 5. Event Editor
         self.editor_group = QGroupBox("Selected Event Details")
@@ -153,14 +179,16 @@ class ScenarioPanel(QWidget):
         self.lbl_act_val = QLabel("Value:")
         
         self._build_editor_form(form)
-        layout.addWidget(self.editor_group)
+        self.right_layout.addWidget(self.editor_group)
         self.list_scen_events.itemSelectionChanged.connect(self.on_scen_event_selected)
         
         # 4. Enable
-        self.chk_enable_scen = QCheckBox("Enable Scenario")
+        self.chk_enable_scen = QCheckBox("Enable This Scenario")
         self.chk_enable_scen.setStyleSheet("font-weight: bold; font-size: 14px;")
         self.chk_enable_scen.toggled.connect(self.on_enable_toggled)
-        layout.addWidget(self.chk_enable_scen)
+        self.right_layout.addWidget(self.chk_enable_scen)
+        
+        main_layout.addWidget(right_widget, 3)
         
         self.current_filepath = None
 
@@ -198,9 +226,27 @@ class ScenarioPanel(QWidget):
             sb.valueChanged.connect(self.mark_dirty)
 
     def refresh_ui(self):
+        # Refresh List
+        self.list_scenarios.blockSignals(True)
+        self.list_scenarios.clear()
+        for i, scen in enumerate(app_state.loaded_scenarios):
+            item = QListWidgetItem(scen.name)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked if scen.enabled else Qt.CheckState.Unchecked)
+            item.setData(Qt.ItemDataRole.UserRole, i)
+            self.list_scenarios.addItem(item)
+            
+            if app_state.current_scenario == scen:
+                item.setSelected(True)
+        self.list_scenarios.blockSignals(False)
+
         scen = app_state.current_scenario
-        if not scen: return
+        if not scen:
+            # Disable right panel controls if no scenario selected
+            self.right_layout.parentWidget().setEnabled(False)
+            return
         
+        self.right_layout.parentWidget().setEnabled(True)
         self.update_editor_combos()
         
         self.edit_name.blockSignals(True)
@@ -258,6 +304,11 @@ class ScenarioPanel(QWidget):
         self.editor_group.setTitle("Selected Event Details")
 
     def update_editor_combos(self):
+        # Preserve current selections if possible
+        curr_area = self.combo_area.currentData()
+        curr_target = self.combo_target.currentData()
+        curr_ref = self.combo_ref.currentData()
+        
         self.combo_area.clear()
         for a in current_project.areas:
             self.combo_area.addItem(f"{a.name} (ID: {a.id})", a.id)
@@ -269,23 +320,50 @@ class ScenarioPanel(QWidget):
         self.combo_ref.clear()
         for s in current_project.ships:
             self.combo_ref.addItem(f"{s.name} (ID: {s.idx})", s.idx)
+            
+        if curr_area is not None:
+            idx = self.combo_area.findData(curr_area)
+            if idx >= 0: self.combo_area.setCurrentIndex(idx)
+        if curr_target is not None:
+            idx = self.combo_target.findData(curr_target)
+            if idx >= 0: self.combo_target.setCurrentIndex(idx)
+        if curr_ref is not None:
+            idx = self.combo_ref.findData(curr_ref)
+            if idx >= 0: self.combo_ref.setCurrentIndex(idx)
 
     def on_meta_changed(self):
+        if not app_state.current_scenario: return
         app_state.current_scenario.name = self.edit_name.text()
         app_state.current_scenario.description = self.edit_desc.text()
+        
+        # Update list item name
+        row = self.list_scenarios.currentRow()
+        if row >= 0:
+            self.list_scenarios.item(row).setText(self.edit_name.text())
 
     def on_scope_changed(self, text):
+        if not app_state.current_scenario: return
         app_state.current_scenario.scope_mode = text
         self.list_scope_ships.setVisible(text == "SELECTED_SHIPS")
 
     def on_ship_selection_changed(self):
+        if not app_state.current_scenario: return
         selected = [item.data(Qt.ItemDataRole.UserRole) for item in self.list_scope_ships.selectedItems()]
         app_state.current_scenario.selected_ships = selected
 
     def on_enable_toggled(self, checked):
+        if not app_state.current_scenario: return
         app_state.current_scenario.enabled = checked
+        
+        # Update list item check state
+        self.list_scenarios.blockSignals(True)
+        row = self.list_scenarios.currentRow()
+        if row >= 0:
+            self.list_scenarios.item(row).setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+        self.list_scenarios.blockSignals(False)
 
     def add_event_to_scenario(self):
+        if not app_state.current_scenario: return
         row = self.list_avail.currentRow()
         if row < 0: return
         eid = self.list_avail.item(row).data(Qt.ItemDataRole.UserRole)
@@ -311,12 +389,14 @@ class ScenarioPanel(QWidget):
         self.refresh_ui()
 
     def remove_event_from_scenario(self):
+        if not app_state.current_scenario: return
         row = self.list_scen_events.currentRow()
         if row < 0: return
         app_state.current_scenario.events.pop(row)
         self.refresh_ui()
 
     def duplicate_scenario_event(self):
+        if not app_state.current_scenario: return
         if self.is_dirty:
             ret = QMessageBox.question(
                 self, "Unsaved Changes", 
@@ -353,12 +433,14 @@ class ScenarioPanel(QWidget):
         self.list_scen_events.setCurrentRow(row + 1)
 
     def on_scen_event_item_changed(self, item):
+        if not app_state.current_scenario: return
         row = self.list_scen_events.row(item)
         if row < 0: return
         is_checked = (item.checkState() == Qt.CheckState.Checked)
         app_state.current_scenario.events[row].enabled = is_checked
 
     def on_scen_list_reordered(self, parent, start, end, destination, row):
+        if not app_state.current_scenario: return
         new_events = []
         for i in range(self.list_scen_events.count()):
             eid = self.list_scen_events.item(i).data(Qt.ItemDataRole.UserRole)
@@ -367,8 +449,37 @@ class ScenarioPanel(QWidget):
                 new_events.append(evt)
         app_state.current_scenario.events = new_events
 
+    def on_scenario_selected_in_list(self):
+        # If multiple items selected, we might want to just show the last selected one or disable editing
+        # For now, let's just pick the current item if it's part of selection
+        items = self.list_scenarios.selectedItems()
+        if len(items) > 1:
+            # If multiple selected, maybe just keep the current_scenario as the one that was clicked last (currentRow)
+            # But we need to ensure the UI reflects that.
+            # Let's rely on currentRow() which usually tracks the last clicked or keyboard navigated item.
+            pass
+            
+        row = self.list_scenarios.currentRow()
+        if row < 0:
+            app_state.current_scenario = None
+        else:
+            app_state.current_scenario = app_state.loaded_scenarios[row]
+        self.refresh_ui()
+
+    def on_scenario_list_item_changed(self, item):
+        row = self.list_scenarios.row(item)
+        if row < 0: return
+        scen = app_state.loaded_scenarios[row]
+        scen.enabled = (item.checkState() == Qt.CheckState.Checked)
+        if scen == app_state.current_scenario:
+            self.chk_enable_scen.blockSignals(True)
+            self.chk_enable_scen.setChecked(scen.enabled)
+            self.chk_enable_scen.blockSignals(False)
+
     def new_scenario(self):
-        app_state.current_scenario = Scenario()
+        new_scen = Scenario()
+        app_state.loaded_scenarios.append(new_scen)
+        app_state.current_scenario = new_scen
         self.current_filepath = None
         self.refresh_ui()
 
@@ -376,13 +487,58 @@ class ScenarioPanel(QWidget):
         path, _ = QFileDialog.getOpenFileName(self, "Open Scenario", "", "Scenario Files (*.json)")
         if path:
             try:
-                app_state.current_scenario = Scenario.load_from_file(path)
+                new_scen = Scenario.load_from_file(path)
+                app_state.loaded_scenarios.append(new_scen)
+                app_state.current_scenario = new_scen
                 self.current_filepath = path
                 self.refresh_ui()
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to load scenario: {e}")
 
+    def remove_scenario(self):
+        items = self.list_scenarios.selectedItems()
+        if not items: return
+        
+        if QMessageBox.question(self, "Remove Scenarios", f"Remove {len(items)} scenarios?", 
+                                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            return
+            
+        # Sort rows descending to remove safely
+        rows = sorted([self.list_scenarios.row(item) for item in items], reverse=True)
+        
+        for row in rows:
+            if 0 <= row < len(app_state.loaded_scenarios):
+                app_state.loaded_scenarios.pop(row)
+        
+        if app_state.loaded_scenarios:
+            # If current scenario was removed, select another one
+            if app_state.current_scenario not in app_state.loaded_scenarios:
+                app_state.current_scenario = app_state.loaded_scenarios[-1]
+        else:
+            app_state.current_scenario = None
+        self.refresh_ui()
+
+    def show_scenario_list_context_menu(self, pos):
+        items = self.list_scenarios.selectedItems()
+        if not items: return
+        
+        menu = QMenu(self)
+        action_enable = menu.addAction("Enable Selected")
+        action_disable = menu.addAction("Disable Selected")
+        menu.addSeparator()
+        action_remove = menu.addAction("Remove Selected")
+        
+        action = menu.exec(self.list_scenarios.mapToGlobal(pos))
+        
+        if action == action_enable:
+            for item in items: item.setCheckState(Qt.CheckState.Checked)
+        elif action == action_disable:
+            for item in items: item.setCheckState(Qt.CheckState.Unchecked)
+        elif action == action_remove:
+            self.remove_scenario()
+
     def save_scenario(self):
+        if not app_state.current_scenario: return
         if not self.current_filepath:
             self.save_scenario_as()
         else:
@@ -393,12 +549,14 @@ class ScenarioPanel(QWidget):
                 QMessageBox.critical(self, "Error", f"Failed to save: {e}")
 
     def save_scenario_as(self):
+        if not app_state.current_scenario: return
         path, _ = QFileDialog.getSaveFileName(self, "Save Scenario As", "", "Scenario Files (*.json)")
         if path:
             self.current_filepath = path
             self.save_scenario()
 
     def on_scen_event_selected(self):
+        if not app_state.current_scenario: return
         # Check for unsaved changes
         if self.is_dirty:
             ret = QMessageBox.question(
@@ -524,6 +682,7 @@ class ScenarioPanel(QWidget):
         if label: label.setVisible(visible)
 
     def save_event_changes(self, target_row=None):
+        if not app_state.current_scenario: return
         if target_row is None:
             items = self.list_scen_events.selectedItems()
             if not items: return

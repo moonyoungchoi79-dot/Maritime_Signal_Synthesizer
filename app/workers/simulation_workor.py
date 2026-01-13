@@ -99,9 +99,10 @@ class SimulationWorker(QObject):
                     active_events = [e for e in self.proj.events if e.enabled]
                     
                     # 2. Scenario Events
-                    from app.core.state import current_scenario
-                    if current_scenario and current_scenario.enabled:
-                        scen = current_scenario
+                    from app.core.state import loaded_scenarios
+                    for scen in loaded_scenarios:
+                        if not scen.enabled: continue
+                        
                         for evt in scen.events:
                             if not evt.enabled: continue
                             
