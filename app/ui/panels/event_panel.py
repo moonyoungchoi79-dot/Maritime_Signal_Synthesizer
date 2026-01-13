@@ -71,7 +71,7 @@ class EventScriptPanel(QWidget):
         self.chk_enabled = QCheckBox("Enabled")
         
         self.combo_trigger = QComboBox()
-        self.combo_trigger.addItems(["TIME", "AREA_ENTER", "AREA_LEAVE", "CPA_UNDER"])
+        self.combo_trigger.addItems(["TIME", "AREA_ENTER", "AREA_LEAVE", "CPA_UNDER", "CPA_OVER"])
         self.combo_trigger.currentIndexChanged.connect(self.update_ui_state)
         
         # Time Reference (Start vs End)
@@ -84,7 +84,7 @@ class EventScriptPanel(QWidget):
         
         # CPA Distance Input
         self.spin_cpa = QDoubleSpinBox()
-        self.spin_cpa.setRange(0, 1000)
+        self.spin_cpa.setRange(0, 50000)
         self.spin_cpa.setSuffix(" nm")
         
         self.combo_ref = QComboBox()
@@ -215,7 +215,8 @@ class EventScriptPanel(QWidget):
             # Condition
             cond_str = f"{e.condition_value}"
             if e.trigger_type == "TIME": cond_str += "s"
-            elif e.trigger_type in ["CPA_UNDER", "DIST_UNDER", "DIST_OVER"]: cond_str += "nm"
+            elif e.trigger_type in ["CPA_UNDER", "CPA_OVER"]: cond_str += "m"
+            elif e.trigger_type in ["DIST_UNDER", "DIST_OVER"]: cond_str += "nm"
             self.event_table.setItem(row, 3, QTableWidgetItem(cond_str))
             
             # Action
@@ -309,7 +310,7 @@ class EventScriptPanel(QWidget):
                 self.combo_time_ref.setCurrentIndex(0) # Elapsed
                 self.time_input.set_seconds(evt.condition_value)
             self.combo_time_ref.blockSignals(False)
-        elif evt.trigger_type in ["CPA_UNDER", "DIST_UNDER", "DIST_OVER"]:
+        elif evt.trigger_type in ["CPA_UNDER", "CPA_OVER", "DIST_UNDER", "DIST_OVER"]:
             self.spin_cpa.setValue(evt.condition_value)
         else:
             idx = self.combo_area.findData(int(evt.condition_value))
@@ -357,18 +358,22 @@ class EventScriptPanel(QWidget):
             self.set_row_visible(self.spin_cpa, False)
             self.set_row_visible(self.combo_area, False)
             self.set_row_visible(self.combo_ref, False)
-        elif trig == "CPA_UNDER":
+        elif trig in ["CPA_UNDER", "CPA_OVER"]:
             self.set_row_visible(self.combo_time_ref, False)
             self.set_row_visible(self.time_input, False)
             self.set_row_visible(self.spin_cpa, True)
             self.set_row_visible(self.combo_area, False)
-            self.set_row_visible(self.combo_ref, False)
+            self.set_row_visible(self.combo_ref, True)
+            self.spin_cpa.setSuffix(" m")
+            self.spin_cpa.setRange(0, 50000)
         elif trig in ["DIST_UNDER", "DIST_OVER"]:
             self.set_row_visible(self.combo_time_ref, False)
             self.set_row_visible(self.time_input, False)
             self.set_row_visible(self.spin_cpa, True)
             self.set_row_visible(self.combo_area, False)
             self.set_row_visible(self.combo_ref, True)
+            self.spin_cpa.setSuffix(" nm")
+            self.spin_cpa.setRange(0, 1000)
         else:
             self.set_row_visible(self.combo_time_ref, False)
             self.set_row_visible(self.time_input, False)
@@ -413,7 +418,7 @@ class EventScriptPanel(QWidget):
                 evt.condition_value = max(0, dur - input_val)
             else:
                 evt.condition_value = input_val
-        elif evt.trigger_type in ["CPA_UNDER", "DIST_UNDER", "DIST_OVER"]:
+        elif evt.trigger_type in ["CPA_UNDER", "CPA_OVER", "DIST_UNDER", "DIST_OVER"]:
             evt.condition_value = self.spin_cpa.value()
         else:
             evt.condition_value = self.combo_area.currentData()

@@ -9,9 +9,9 @@ import numpy as np
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, 
     QTextEdit, QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox, QTableWidget, 
-    QHeaderView, QGroupBox, QMessageBox, QFileDialog, QDialog, QGraphicsScene, 
+    QHeaderView, QGroupBox, QMessageBox, QFileDialog, QDialog, QGraphicsScene, QListWidget,
     QGraphicsItem, QGraphicsPathItem, QGraphicsPolygonItem, QGraphicsEllipseItem, 
-    QGraphicsTextItem, QAbstractSpinBox
+    QGraphicsTextItem, QAbstractSpinBox, QMenu
 )
 from PyQt6.QtCore import (
     Qt, pyqtSignal, QThread, QTimer, QPointF
@@ -28,9 +28,11 @@ from app.core.nmea import parse_nmea_fields
 from app.workers.simulation_workor import SimulationWorker
 from app.ui.map.sim_map_view import SimMapView
 from app.ui.dialogs.rtg_dialog import RTGDialog
+import app.core.state as app_state
 
 class SimulationPanel(QWidget):
     state_changed = pyqtSignal(str)
+    simulation_status_updated = pyqtSignal(str, list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -186,6 +188,15 @@ class SimulationPanel(QWidget):
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
         
+        self.status_group = QGroupBox("Simulation Status")
+        status_layout = QVBoxLayout(self.status_group)
+        self.lbl_active_scen = QLabel("Active Scenario: None")
+        self.list_active_events = QListWidget()
+        self.list_active_events.setFixedHeight(80)
+        status_layout.addWidget(self.lbl_active_scen)
+        status_layout.addWidget(self.list_active_events)
+        right_layout.addWidget(self.status_group)
+
         self.on_off_group = QGroupBox("Signal On/Off")
         on_off_layout = QVBoxLayout(self.on_off_group)
         self.on_off_table = self.create_signal_on_off_table()
@@ -206,12 +217,23 @@ class SimulationPanel(QWidget):
         self.log_filter_combo = QComboBox()
         self.log_filter_combo.addItems(["ALL", "AIVDM", "RATTM"])
         filter_layout.addWidget(self.log_filter_combo)
+        
+        self.log_keyword_edit = QLineEdit()
+        self.log_keyword_edit.setPlaceholderText("Keyword filter...")
+        filter_layout.addWidget(self.log_keyword_edit)
+        
+        self.chk_auto_scroll = QCheckBox("Auto Scroll")
+        self.chk_auto_scroll.setChecked(True)
+        filter_layout.addWidget(self.chk_auto_scroll)
+        
         filter_layout.addStretch()
         log_layout.addLayout(filter_layout)
 
         self.log_list = QTextEdit()
         self.log_list.setReadOnly(True)
         self.log_list.document().setMaximumBlockCount(1000)
+        self.log_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.log_list.customContextMenuRequested.connect(self.show_log_context_menu)
         log_layout.addWidget(self.log_list)
 
         right_layout.addWidget(log_group, 1)
@@ -1047,8 +1069,40 @@ class SimulationPanel(QWidget):
         filter_val = self.log_filter_combo.currentText()
         if filter_val != "ALL" and filter_val not in text:
             return
+            
+        keyword = self.log_keyword_edit.text().strip()
+        if keyword and keyword.lower() not in text.lower():
+            return
 
-        self.log_list.append(text)
+        if not self.chk_auto_scroll.isChecked():
+            sb = self.log_list.verticalScrollBar()
+            old_val = sb.value()
+            self.log_list.append(text)
+            sb.setValue(old_val)
+        else:
+            self.log_list.append(text)
+            sb = self.log_list.verticalScrollBar()
+            sb.setValue(sb.maximum())
+
+    def show_log_context_menu(self, pos):
+        menu = QMenu(self)
+        
+        has_selection = bool(self.log_list.textCursor().hasSelection())
+        
+        action_copy = menu.addAction("Copy")
+        action_copy.setEnabled(has_selection)
+        action_copy.triggered.connect(self.log_list.copy)
+        
+        menu.addSeparator()
+        
+        action_select_all = menu.addAction("Select All")
+        action_select_all.triggered.connect(self.log_list.selectAll)
+        
+        menu.addSeparator()
+        action_clear = menu.addAction("Clear")
+        action_clear.triggered.connect(self.log_list.clear)
+        
+        menu.exec(self.log_list.mapToGlobal(pos))
             
     def update_positions(self, pos_dict):
         # Update Trails
@@ -1148,7 +1202,48 @@ class SimulationPanel(QWidget):
             if follow_idx in pos_dict:
                 px, py, _ = pos_dict[follow_idx]
                 self.view.centerOn(px, py)
+        
+        self.emit_simulation_status()
         self.scene.update()
+
+    def emit_simulation_status(self):
+        active_scen_names = []
+        events_list = []
+        
+        # Project Events
+        for e in current_project.events:
+            if e.enabled:
+                ship = current_project.get_ship_by_idx(e.target_ship_idx)
+                s_name = ship.name if ship else "Unknown"
+                events_list.append(f"[Proj] {e.name} (Tgt: {s_name})")
+        
+        # Scenario Events
+        if app_state.loaded_scenarios:
+            for scen in app_state.loaded_scenarios:
+                if scen.enabled:
+                    active_scen_names.append(scen.name)
+                    for e in scen.events:
+                        if e.enabled:
+                            should_apply = False
+                            if scen.scope_mode == "ALL_SHIPS": should_apply = True
+                            elif scen.scope_mode == "OWN_ONLY":
+                                if e.target_ship_idx == current_project.settings.own_ship_idx: should_apply = True
+                            elif scen.scope_mode == "TARGET_ONLY":
+                                if e.target_ship_idx != current_project.settings.own_ship_idx: should_apply = True
+                            elif scen.scope_mode == "SELECTED_SHIPS":
+                                if e.target_ship_idx in scen.selected_ships: should_apply = True
+                            
+                            if should_apply:
+                                ship = current_project.get_ship_by_idx(e.target_ship_idx)
+                                s_name = ship.name if ship else "Unknown"
+                                events_list.append(f"[Scen] {e.name} (Tgt: {s_name})")
+                        
+        scen_text = ", ".join(active_scen_names) if active_scen_names else "None"
+        self.lbl_active_scen.setText(f"Active Scenario: {scen_text}")
+        self.list_active_events.clear()
+        self.list_active_events.addItems(events_list)
+
+        self.simulation_status_updated.emit(scen_text, events_list)
 
     def on_export_data(self, ready):
         self.data_ready_flag = ready

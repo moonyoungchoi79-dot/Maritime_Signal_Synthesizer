@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import (
     QHeaderView, QTreeWidget, QTreeWidgetItem, QTabWidget, QTabBar, QStyleOptionTab,
     QStackedWidget, QGroupBox, QFrame, QSplitter, QScrollArea, QMessageBox, QFileDialog,
     QColorDialog, QInputDialog, QDialog, QDialogButtonBox, QMenuBar, QMenu,
-    QToolBar, QStatusBar, QGraphicsView, QGraphicsScene, QGraphicsItem, QGraphicsPathItem,
+    QToolBar, QStatusBar, QGraphicsView, QGraphicsScene, QGraphicsItem, QGraphicsPathItem, QDockWidget,
     QGraphicsPolygonItem, QGraphicsEllipseItem, QGraphicsTextItem, QAbstractItemView,
     QAbstractSpinBox, QTextBrowser, QSizePolicy, QDateTimeEdit
 )
@@ -47,9 +47,27 @@ from app.ui.dialogs.help_dialog import HelpDialog
 from app.ui.panels.speed_panel import SpeedGeneratorPanel
 from app.ui.panels.simulation_panel import SimulationPanel
 from app.ui.panels.event_panel import EventScriptPanel
+from app.ui.panels.scenario_panel import ScenarioPanel
 from app.workers.speed_generator_worker import SpeedGeneratorWorker
 
 class ColoredTabBar(QTabBar):
+    def tabSizeHint(self, index):
+        size = super().tabSizeHint(index)
+        if self.tabText(index) == "":
+            total_width = self.width()
+            used_width = 0
+            for i in range(self.count()):
+                if i != index:
+                    used_width += super().tabSizeHint(i).width()
+            space = total_width - used_width
+            if space < 0: space = 0
+            return QSize(space, size.height())
+        return size
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.updateGeometry()
+
     def paintEvent(self, event):
         painter = QPainter(self)
         option = QStyleOptionTab()
@@ -66,6 +84,8 @@ class ColoredTabBar(QTabBar):
         text_color = QColor(Qt.GlobalColor.white) if is_dark else QColor(Qt.GlobalColor.black)
 
         for i in range(self.count()):
+            if self.tabText(i) == "": continue
+            
             self.initStyleOption(option, i)
             
             # Draw background
@@ -78,7 +98,7 @@ class ColoredTabBar(QTabBar):
             painter.drawText(option.rect, Qt.AlignmentFlag.AlignCenter, self.tabText(i))
             
             # Draw Separator
-            if i < self.count() - 1:
+            if i < self.count() - 1 and self.tabText(i+1) != "":
                 painter.setPen(QPen(QColor(200, 200, 200), 1))
                 painter.drawLine(option.rect.topRight() + QPoint(0, 5), option.rect.bottomRight() - QPoint(0, 5))
             
@@ -99,6 +119,7 @@ class MainWindow(QMainWindow):
         self.sim_panel = SimulationPanel(self)
         self.speed_pop = SpeedGeneratorPanel(self)
         self.event_panel = EventScriptPanel(self)
+        self.scenario_panel = ScenarioPanel(self)
         
         self.speed_pop.request_generate.connect(self.generate_speed_logic)
         
@@ -320,6 +341,8 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.setTabPosition(QTabWidget.TabPosition.South)
         self.tabs.setTabBar(ColoredTabBar(self.tabs))
+        self.tabs.setDocumentMode(True)
+        self.tabs.tabBar().setExpanding(False)
         
         # Map Editor Tab
         self.map_editor_widget = QWidget()
@@ -410,10 +433,17 @@ class MainWindow(QMainWindow):
         
         main_h.addWidget(right_widget, 1)
         
-        self.tabs.addTab(self.map_editor_widget, "Path Editor")
-        self.tabs.addTab(self.speed_pop, "Speed Generator")
-        self.tabs.addTab(self.sim_panel, "Simulator")
-        self.tabs.addTab(self.event_panel, "Event Scripter")
+        self.tabs.addTab(self.map_editor_widget, "Path")
+        self.tabs.addTab(self.speed_pop, "Speed")
+        self.tabs.addTab(self.event_panel, "Event")
+        self.tabs.addTab(self.scenario_panel, "Scenario")
+        
+        # Spacer
+        self.spacer_widget = QWidget()
+        self.tabs.addTab(self.spacer_widget, "")
+        self.tabs.setTabEnabled(4, False)
+        
+        self.tabs.addTab(self.sim_panel, "Simulation")
         
         main_v.addWidget(self.tabs)
         
@@ -1323,6 +1353,8 @@ class MainWindow(QMainWindow):
             self.sim_panel.refresh_tables()
         elif w == self.event_panel:
             self.event_panel.refresh_all()
+        elif w == self.scenario_panel:
+            self.scenario_panel.refresh_ui()
 
     def update_sim_tab_state(self, state):
         idx = self.tabs.indexOf(self.sim_panel)
@@ -1351,13 +1383,13 @@ class MainWindow(QMainWindow):
             return QIcon(pix)
         
         if state == "PLAY":
-            self.tabs.setTabText(idx, "   Simulator (Running)")
+            self.tabs.setTabText(idx, "   Simulation (Running)")
             self.tabs.setTabIcon(idx, get_white_icon('play'))
         elif state == "PAUSE":
-            self.tabs.setTabText(idx, "   Simulator (Paused)")
+            self.tabs.setTabText(idx, "   Simulation (Paused)")
             self.tabs.setTabIcon(idx, get_white_icon('pause'))
         elif state == "STOP":
-            self.tabs.setTabText(idx, "   Simulator (Stopped)")
+            self.tabs.setTabText(idx, "   Simulation (Stopped)")
             # Create Red Stop Icon
             pix = QPixmap(16, 16)
             pix.fill(Qt.GlobalColor.transparent)

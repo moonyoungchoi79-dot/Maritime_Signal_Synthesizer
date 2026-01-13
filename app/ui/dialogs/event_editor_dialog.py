@@ -68,8 +68,8 @@ class EventEditorDialog(QWidget):
         
         # CPA Distance Input
         self.spin_cpa = QDoubleSpinBox()
-        self.spin_cpa.setRange(0, 1000)
-        self.spin_cpa.setSuffix(" nm")
+        self.spin_cpa.setRange(0, 50000)
+        self.spin_cpa.setSuffix(" m")
         
         self.combo_ref = QComboBox() # For Reference Ship
         
@@ -267,18 +267,7 @@ class EventEditorDialog(QWidget):
             self.editor_group.layout().labelForField(self.spin_cpa).setVisible(False)
             self.editor_group.layout().labelForField(self.combo_area).setVisible(False)
             self.editor_group.layout().labelForField(self.combo_ref).setVisible(False)
-        elif trig == "CPA_UNDER":
-            self.combo_time_ref.setVisible(False)
-            self.time_input.setVisible(False)
-            self.spin_cpa.setVisible(True)
-            self.combo_area.setVisible(False)
-            self.combo_ref.setVisible(False)
-            self.editor_group.layout().labelForField(self.combo_time_ref).setVisible(False)
-            self.editor_group.layout().labelForField(self.time_input).setVisible(False)
-            self.editor_group.layout().labelForField(self.spin_cpa).setVisible(True)
-            self.editor_group.layout().labelForField(self.combo_area).setVisible(False)
-            self.editor_group.layout().labelForField(self.combo_ref).setVisible(False)
-        elif trig in ["DIST_UNDER", "DIST_OVER"]:
+        elif trig in ["CPA_UNDER", "CPA_OVER", "DIST_UNDER", "DIST_OVER"]:
             self.combo_time_ref.setVisible(False)
             self.time_input.setVisible(False)
             self.spin_cpa.setVisible(True)
