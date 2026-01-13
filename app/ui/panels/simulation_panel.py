@@ -217,6 +217,15 @@ class SimulationPanel(QWidget):
         self.log_filter_combo = QComboBox()
         self.log_filter_combo.addItems(["ALL", "AIVDM", "RATTM"])
         filter_layout.addWidget(self.log_filter_combo)
+        
+        self.log_keyword_edit = QLineEdit()
+        self.log_keyword_edit.setPlaceholderText("Keyword filter...")
+        filter_layout.addWidget(self.log_keyword_edit)
+        
+        self.chk_auto_scroll = QCheckBox("Auto Scroll")
+        self.chk_auto_scroll.setChecked(True)
+        filter_layout.addWidget(self.chk_auto_scroll)
+        
         filter_layout.addStretch()
         log_layout.addLayout(filter_layout)
 
@@ -1058,8 +1067,20 @@ class SimulationPanel(QWidget):
         filter_val = self.log_filter_combo.currentText()
         if filter_val != "ALL" and filter_val not in text:
             return
+            
+        keyword = self.log_keyword_edit.text().strip()
+        if keyword and keyword.lower() not in text.lower():
+            return
 
-        self.log_list.append(text)
+        if not self.chk_auto_scroll.isChecked():
+            sb = self.log_list.verticalScrollBar()
+            old_val = sb.value()
+            self.log_list.append(text)
+            sb.setValue(old_val)
+        else:
+            self.log_list.append(text)
+            sb = self.log_list.verticalScrollBar()
+            sb.setValue(sb.maximum())
             
     def update_positions(self, pos_dict):
         # Update Trails

@@ -1,10 +1,11 @@
 import os
 import uuid
 import copy
+import re
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, 
     QComboBox, QListWidget, QListWidgetItem, QGroupBox, QFormLayout, 
-    QFileDialog, QMessageBox, QCheckBox, QAbstractItemView, QDoubleSpinBox
+    QFileDialog, QMessageBox, QCheckBox, QAbstractItemView, QDoubleSpinBox, QSpinBox
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QBrush, QColor
@@ -21,6 +22,10 @@ class ScenarioPanel(QWidget):
         # Initialize global state if None
         if app_state.current_scenario is None:
             app_state.current_scenario = Scenario()
+            
+        self.is_dirty = False
+        self.loading_event = False
+        self.last_selected_row = -1
             
         self.init_ui()
         self.refresh_ui()
@@ -102,6 +107,11 @@ class ScenarioPanel(QWidget):
         self.list_scen_events.model().rowsMoved.connect(self.on_scen_list_reordered)
         self.list_scen_events.itemChanged.connect(self.on_scen_event_item_changed)
         v2.addWidget(self.list_scen_events)
+        
+        self.btn_dup_scen = QPushButton("Duplicate Selected")
+        self.btn_dup_scen.clicked.connect(self.duplicate_scenario_event)
+        v2.addWidget(self.btn_dup_scen)
+        
         event_layout.addLayout(v2)
         
         layout.addWidget(event_group)
@@ -170,6 +180,22 @@ class ScenarioPanel(QWidget):
         btn_save_evt = QPushButton("Apply Changes")
         btn_save_evt.clicked.connect(self.save_event_changes)
         form.addRow(btn_save_evt)
+        
+        # Connect change signals for dirty check
+        self.edit_evt_name.textChanged.connect(self.mark_dirty)
+        self.chk_evt_enabled.toggled.connect(self.mark_dirty)
+        self.combo_trigger.currentIndexChanged.connect(self.mark_dirty)
+        self.combo_time_ref.currentIndexChanged.connect(self.mark_dirty)
+        self.spin_cpa.valueChanged.connect(self.mark_dirty)
+        self.combo_ref.currentIndexChanged.connect(self.mark_dirty)
+        self.combo_area.currentIndexChanged.connect(self.mark_dirty)
+        self.combo_action.currentIndexChanged.connect(self.mark_dirty)
+        self.combo_target.currentIndexChanged.connect(self.mark_dirty)
+        self.spin_action_val.valueChanged.connect(self.mark_dirty)
+        
+        # Try to connect TimeInputWidget internal spinboxes
+        for sb in self.time_input.findChildren(QSpinBox):
+            sb.valueChanged.connect(self.mark_dirty)
 
     def refresh_ui(self):
         scen = app_state.current_scenario
@@ -227,6 +253,9 @@ class ScenarioPanel(QWidget):
             self.list_scen_events.addItem(item)
         self.list_scen_events.blockSignals(False)
         self.editor_group.setEnabled(False)
+        self.is_dirty = False
+        self.last_selected_row = -1
+        self.editor_group.setTitle("Selected Event Details")
 
     def update_editor_combos(self):
         self.combo_area.clear()
@@ -287,6 +316,42 @@ class ScenarioPanel(QWidget):
         app_state.current_scenario.events.pop(row)
         self.refresh_ui()
 
+    def duplicate_scenario_event(self):
+        if self.is_dirty:
+            ret = QMessageBox.question(
+                self, "Unsaved Changes", 
+                "You have unsaved changes. Save them before duplicating?",
+                QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel
+            )
+            if ret == QMessageBox.StandardButton.Cancel:
+                return
+            elif ret == QMessageBox.StandardButton.Save:
+                self.save_event_changes(target_row=self.last_selected_row)
+
+        row = self.list_scen_events.currentRow()
+        if row < 0: return
+        
+        orig_evt = app_state.current_scenario.events[row]
+        new_evt = copy.deepcopy(orig_evt)
+        new_evt.id = str(uuid.uuid4())
+        
+        base_name = orig_evt.name
+        match = re.match(r"(.*) \(Copy \d+\)$", base_name)
+        if match:
+            base_name = match.group(1)
+        
+        existing_names = {e.name for e in app_state.current_scenario.events}
+        count = 1
+        new_name = f"{base_name} (Copy {count})"
+        while new_name in existing_names:
+            count += 1
+            new_name = f"{base_name} (Copy {count})"
+        new_evt.name = new_name
+        
+        app_state.current_scenario.events.insert(row + 1, new_evt)
+        self.refresh_ui()
+        self.list_scen_events.setCurrentRow(row + 1)
+
     def on_scen_event_item_changed(self, item):
         row = self.list_scen_events.row(item)
         if row < 0: return
@@ -334,17 +399,45 @@ class ScenarioPanel(QWidget):
             self.save_scenario()
 
     def on_scen_event_selected(self):
+        # Check for unsaved changes
+        if self.is_dirty:
+            ret = QMessageBox.question(
+                self, "Unsaved Changes", 
+                "You have unsaved changes in the current event. Do you want to save them?",
+                QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel
+            )
+            
+            if ret == QMessageBox.StandardButton.Cancel:
+                self.list_scen_events.blockSignals(True)
+                if self.last_selected_row != -1 and self.last_selected_row < self.list_scen_events.count():
+                    self.list_scen_events.setCurrentRow(self.last_selected_row)
+                else:
+                    self.list_scen_events.clearSelection()
+                self.list_scen_events.blockSignals(False)
+                return
+            elif ret == QMessageBox.StandardButton.Save:
+                # Save to the PREVIOUS row
+                self.save_event_changes(target_row=self.last_selected_row)
+            else:
+                # Discard
+                self.is_dirty = False
+                self.editor_group.setTitle("Selected Event Details")
+
         items = self.list_scen_events.selectedItems()
         if not items:
             self.editor_group.setEnabled(False)
+            self.last_selected_row = -1
             return
         
         row = self.list_scen_events.row(items[0])
         if row < 0 or row >= len(app_state.current_scenario.events):
             self.editor_group.setEnabled(False)
+            self.last_selected_row = -1
             return
             
         evt = app_state.current_scenario.events[row]
+        self.loading_event = True
+        self.last_selected_row = row
         self.editor_group.setEnabled(True)
         
         self.edit_evt_name.setText(evt.name)
@@ -379,6 +472,7 @@ class ScenarioPanel(QWidget):
         
         self.spin_action_val.setValue(evt.action_value)
         self.update_editor_ui_state()
+        self.loading_event = False
 
     def update_editor_ui_state(self):
         trig = self.combo_trigger.currentText()
@@ -429,10 +523,13 @@ class ScenarioPanel(QWidget):
         label = self.editor_group.layout().labelForField(widget)
         if label: label.setVisible(visible)
 
-    def save_event_changes(self):
-        items = self.list_scen_events.selectedItems()
-        if not items: return
-        row = self.list_scen_events.row(items[0])
+    def save_event_changes(self, target_row=None):
+        if target_row is None:
+            items = self.list_scen_events.selectedItems()
+            if not items: return
+            row = self.list_scen_events.row(items[0])
+        else:
+            row = target_row
         
         evt = app_state.current_scenario.events[row]
         evt.name = self.edit_evt_name.text()
@@ -458,9 +555,19 @@ class ScenarioPanel(QWidget):
         evt.action_value = self.spin_action_val.value()
         
         self.list_scen_events.blockSignals(True)
-        items[0].setText(evt.name)
-        items[0].setCheckState(Qt.CheckState.Checked if evt.enabled else Qt.CheckState.Unchecked)
+        item = self.list_scen_events.item(row)
+        if item:
+            item.setText(evt.name)
+            item.setCheckState(Qt.CheckState.Checked if evt.enabled else Qt.CheckState.Unchecked)
         self.list_scen_events.blockSignals(False)
+        
+        self.is_dirty = False
+        self.editor_group.setTitle("Selected Event Details")
+
+    def mark_dirty(self):
+        if not self.loading_event:
+            self.is_dirty = True
+            self.editor_group.setTitle("Selected Event Details *")
 
     def get_current_ship_duration(self):
         sid = self.combo_target.currentData()
