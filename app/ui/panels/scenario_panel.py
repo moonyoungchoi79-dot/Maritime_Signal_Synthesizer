@@ -4,13 +4,14 @@ import copy
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, 
     QComboBox, QListWidget, QListWidgetItem, QGroupBox, QFormLayout, 
-    QFileDialog, QMessageBox, QCheckBox, QAbstractItemView
+    QFileDialog, QMessageBox, QCheckBox, QAbstractItemView, QDoubleSpinBox
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QBrush, QColor
 
 from app.core.models.project import current_project, EventTrigger
 from app.core.models.scenario import Scenario
+from app.ui.widgets.time_input_widget import TimeInputWidget
 import app.core.state as app_state
 
 class ScenarioPanel(QWidget):
@@ -97,11 +98,53 @@ class ScenarioPanel(QWidget):
         v2 = QVBoxLayout()
         v2.addWidget(QLabel("Scenario Events (Included)"))
         self.list_scen_events = QListWidget()
+        self.list_scen_events.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.list_scen_events.model().rowsMoved.connect(self.on_scen_list_reordered)
         self.list_scen_events.itemChanged.connect(self.on_scen_event_item_changed)
         v2.addWidget(self.list_scen_events)
         event_layout.addLayout(v2)
         
         layout.addWidget(event_group)
+        
+        # 5. Event Editor
+        self.editor_group = QGroupBox("Selected Event Details")
+        self.editor_group.setEnabled(False)
+        form = QFormLayout(self.editor_group)
+        
+        self.edit_evt_name = QLineEdit()
+        self.chk_evt_enabled = QCheckBox("Enabled")
+        
+        self.combo_trigger = QComboBox()
+        self.combo_trigger.addItems(["TIME", "AREA_ENTER", "AREA_LEAVE", "CPA_UNDER", "CPA_OVER", "DIST_UNDER", "DIST_OVER"])
+        self.combo_trigger.currentIndexChanged.connect(self.update_editor_ui_state)
+        
+        self.combo_time_ref = QComboBox()
+        self.combo_time_ref.addItems(["Elapsed Time (Since Start)", "Remaining Time (Until End)"])
+        self.combo_time_ref.currentIndexChanged.connect(self.on_time_ref_changed)
+        
+        self.time_input = TimeInputWidget()
+        
+        self.spin_cpa = QDoubleSpinBox()
+        self.spin_cpa.setRange(0, 50000)
+        self.spin_cpa.setSuffix(" m")
+        
+        self.combo_ref = QComboBox()
+        self.combo_area = QComboBox()
+        
+        self.combo_action = QComboBox()
+        self.combo_action.addItems(["STOP", "CHANGE_SPEED", "CHANGE_HEADING"])
+        self.combo_action.currentIndexChanged.connect(self.update_editor_ui_state)
+        
+        self.combo_target = QComboBox()
+        
+        self.spin_action_val = QDoubleSpinBox()
+        self.spin_action_val.setRange(0, 1000)
+        
+        self.lbl_act_val = QLabel("Value:")
+        
+        self._build_editor_form(form)
+        layout.addWidget(self.editor_group)
+        self.list_scen_events.itemSelectionChanged.connect(self.on_scen_event_selected)
         
         # 4. Enable
         self.chk_enable_scen = QCheckBox("Enable Scenario")
@@ -111,9 +154,28 @@ class ScenarioPanel(QWidget):
         
         self.current_filepath = None
 
+    def _build_editor_form(self, form):
+        form.addRow("Name:", self.edit_evt_name)
+        form.addRow("", self.chk_evt_enabled)
+        form.addRow("Trigger Type:", self.combo_trigger)
+        form.addRow("Time Ref:", self.combo_time_ref)
+        form.addRow("Time:", self.time_input)
+        form.addRow("CPA Dist:", self.spin_cpa)
+        form.addRow("Ref Ship:", self.combo_ref)
+        form.addRow("Area:", self.combo_area)
+        form.addRow("Action Type:", self.combo_action)
+        form.addRow("Target Ship:", self.combo_target)
+        form.addRow(self.lbl_act_val, self.spin_action_val)
+        
+        btn_save_evt = QPushButton("Apply Changes")
+        btn_save_evt.clicked.connect(self.save_event_changes)
+        form.addRow(btn_save_evt)
+
     def refresh_ui(self):
         scen = app_state.current_scenario
         if not scen: return
+        
+        self.update_editor_combos()
         
         self.edit_name.blockSignals(True)
         self.edit_name.setText(scen.name)
@@ -164,6 +226,20 @@ class ScenarioPanel(QWidget):
             item.setCheckState(Qt.CheckState.Checked if e.enabled else Qt.CheckState.Unchecked)
             self.list_scen_events.addItem(item)
         self.list_scen_events.blockSignals(False)
+        self.editor_group.setEnabled(False)
+
+    def update_editor_combos(self):
+        self.combo_area.clear()
+        for a in current_project.areas:
+            self.combo_area.addItem(f"{a.name} (ID: {a.id})", a.id)
+            
+        self.combo_target.clear()
+        for s in current_project.ships:
+            self.combo_target.addItem(f"{s.name} (ID: {s.idx})", s.idx)
+            
+        self.combo_ref.clear()
+        for s in current_project.ships:
+            self.combo_ref.addItem(f"{s.name} (ID: {s.idx})", s.idx)
 
     def on_meta_changed(self):
         app_state.current_scenario.name = self.edit_name.text()
@@ -217,6 +293,15 @@ class ScenarioPanel(QWidget):
         is_checked = (item.checkState() == Qt.CheckState.Checked)
         app_state.current_scenario.events[row].enabled = is_checked
 
+    def on_scen_list_reordered(self, parent, start, end, destination, row):
+        new_events = []
+        for i in range(self.list_scen_events.count()):
+            eid = self.list_scen_events.item(i).data(Qt.ItemDataRole.UserRole)
+            evt = next((e for e in app_state.current_scenario.events if e.id == eid), None)
+            if evt:
+                new_events.append(evt)
+        app_state.current_scenario.events = new_events
+
     def new_scenario(self):
         app_state.current_scenario = Scenario()
         self.current_filepath = None
@@ -247,3 +332,150 @@ class ScenarioPanel(QWidget):
         if path:
             self.current_filepath = path
             self.save_scenario()
+
+    def on_scen_event_selected(self):
+        items = self.list_scen_events.selectedItems()
+        if not items:
+            self.editor_group.setEnabled(False)
+            return
+        
+        row = self.list_scen_events.row(items[0])
+        if row < 0 or row >= len(app_state.current_scenario.events):
+            self.editor_group.setEnabled(False)
+            return
+            
+        evt = app_state.current_scenario.events[row]
+        self.editor_group.setEnabled(True)
+        
+        self.edit_evt_name.setText(evt.name)
+        self.chk_evt_enabled.setChecked(evt.enabled)
+        self.combo_trigger.setCurrentText(evt.trigger_type)
+        
+        if evt.trigger_type == "TIME":
+            idx = self.combo_target.findData(evt.target_ship_idx)
+            if idx >= 0: self.combo_target.setCurrentIndex(idx)
+
+            self.combo_time_ref.blockSignals(True)
+            if evt.is_relative_to_end:
+                self.combo_time_ref.setCurrentIndex(1)
+                self._display_time_as_remaining(evt.condition_value)
+            else:
+                self.combo_time_ref.setCurrentIndex(0)
+                self.time_input.set_seconds(evt.condition_value)
+            self.combo_time_ref.blockSignals(False)
+        elif evt.trigger_type in ["CPA_UNDER", "CPA_OVER", "DIST_UNDER", "DIST_OVER"]:
+            self.spin_cpa.setValue(evt.condition_value)
+        else:
+            idx = self.combo_area.findData(int(evt.condition_value))
+            if idx >= 0: self.combo_area.setCurrentIndex(idx)
+            
+        self.combo_action.setCurrentText(evt.action_type)
+        
+        idx = self.combo_target.findData(evt.target_ship_idx)
+        if idx >= 0: self.combo_target.setCurrentIndex(idx)
+        
+        idx = self.combo_ref.findData(evt.reference_ship_idx)
+        if idx >= 0: self.combo_ref.setCurrentIndex(idx)
+        
+        self.spin_action_val.setValue(evt.action_value)
+        self.update_editor_ui_state()
+
+    def update_editor_ui_state(self):
+        trig = self.combo_trigger.currentText()
+        if trig == "TIME":
+            self.set_row_visible(self.combo_time_ref, True)
+            self.set_row_visible(self.time_input, True)
+            self.set_row_visible(self.spin_cpa, False)
+            self.set_row_visible(self.combo_area, False)
+            self.set_row_visible(self.combo_ref, False)
+        elif trig in ["CPA_UNDER", "CPA_OVER"]:
+            self.set_row_visible(self.combo_time_ref, False)
+            self.set_row_visible(self.time_input, False)
+            self.set_row_visible(self.spin_cpa, True)
+            self.set_row_visible(self.combo_area, False)
+            self.set_row_visible(self.combo_ref, True)
+            self.spin_cpa.setSuffix(" m")
+            self.spin_cpa.setRange(0, 50000)
+        elif trig in ["DIST_UNDER", "DIST_OVER"]:
+            self.set_row_visible(self.combo_time_ref, False)
+            self.set_row_visible(self.time_input, False)
+            self.set_row_visible(self.spin_cpa, True)
+            self.set_row_visible(self.combo_area, False)
+            self.set_row_visible(self.combo_ref, True)
+            self.spin_cpa.setSuffix(" nm")
+            self.spin_cpa.setRange(0, 1000)
+        else:
+            self.set_row_visible(self.combo_time_ref, False)
+            self.set_row_visible(self.time_input, False)
+            self.set_row_visible(self.spin_cpa, False)
+            self.set_row_visible(self.combo_area, True)
+            self.set_row_visible(self.combo_ref, False)
+            
+        act = self.combo_action.currentText()
+        if act == "STOP":
+            self.lbl_act_val.setVisible(False)
+            self.spin_action_val.setVisible(False)
+        elif act == "CHANGE_SPEED":
+            self.lbl_act_val.setText("New Speed (kn):")
+            self.lbl_act_val.setVisible(True)
+            self.spin_action_val.setVisible(True)
+        elif act == "CHANGE_HEADING":
+            self.lbl_act_val.setText("New Heading (deg):")
+            self.lbl_act_val.setVisible(True)
+            self.spin_action_val.setVisible(True)
+
+    def set_row_visible(self, widget, visible):
+        widget.setVisible(visible)
+        label = self.editor_group.layout().labelForField(widget)
+        if label: label.setVisible(visible)
+
+    def save_event_changes(self):
+        items = self.list_scen_events.selectedItems()
+        if not items: return
+        row = self.list_scen_events.row(items[0])
+        
+        evt = app_state.current_scenario.events[row]
+        evt.name = self.edit_evt_name.text()
+        evt.enabled = self.chk_evt_enabled.isChecked()
+        evt.trigger_type = self.combo_trigger.currentText()
+        
+        if evt.trigger_type == "TIME":
+            evt.is_relative_to_end = (self.combo_time_ref.currentIndex() == 1)
+            input_val = float(self.time_input.get_seconds())
+            if evt.is_relative_to_end:
+                dur = self.get_current_ship_duration()
+                evt.condition_value = max(0, dur - input_val)
+            else:
+                evt.condition_value = input_val
+        elif evt.trigger_type in ["CPA_UNDER", "CPA_OVER", "DIST_UNDER", "DIST_OVER"]:
+            evt.condition_value = self.spin_cpa.value()
+        else:
+            evt.condition_value = self.combo_area.currentData()
+            
+        evt.action_type = self.combo_action.currentText()
+        evt.target_ship_idx = self.combo_target.currentData()
+        evt.reference_ship_idx = self.combo_ref.currentData()
+        evt.action_value = self.spin_action_val.value()
+        
+        self.list_scen_events.blockSignals(True)
+        items[0].setText(evt.name)
+        items[0].setCheckState(Qt.CheckState.Checked if evt.enabled else Qt.CheckState.Unchecked)
+        self.list_scen_events.blockSignals(False)
+
+    def get_current_ship_duration(self):
+        sid = self.combo_target.currentData()
+        ship = current_project.get_ship_by_idx(sid)
+        if ship and ship.is_generated:
+            return ship.total_duration_sec
+        return 0.0
+
+    def _display_time_as_remaining(self, elapsed_sec):
+        dur = self.get_current_ship_duration()
+        rem = max(0, dur - elapsed_sec)
+        self.time_input.set_seconds(rem)
+
+    def on_time_ref_changed(self):
+        current_val = self.time_input.get_seconds()
+        dur = self.get_current_ship_duration()
+        new_val = max(0, dur - current_val)
+        self.time_input.set_seconds(new_val)
