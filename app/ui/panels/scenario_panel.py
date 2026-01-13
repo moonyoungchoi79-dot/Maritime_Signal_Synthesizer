@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QComboBox, QListWidget, QListWidgetItem, QGroupBox, QFormLayout, 
     QFileDialog, QMessageBox, QCheckBox, QAbstractItemView, QDoubleSpinBox, QSpinBox, QMenu
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor
 
 from app.core.models.project import current_project, EventTrigger

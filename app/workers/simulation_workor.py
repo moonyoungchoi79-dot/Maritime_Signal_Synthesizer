@@ -338,21 +338,25 @@ class SimulationWorker(QObject):
             opt = getattr(evt, 'action_option', "")
             if opt == "ReturnToOriginalPath_ShortestDistance":
                 # Find closest point on original path
-                if ship.raw_points:
+                if ship.resampled_points:
                     mi = self.proj.map_info # Use project map info
                     min_dist = float('inf')
-                    target_lat, target_lon = dyn['lat'], dyn['lon']
-                    found = False
+                    closest_idx = -1
+                    
                     # Simple search through resampled points
-                    for (px, py) in ship.resampled_points:
+                    for i, (px, py) in enumerate(ship.resampled_points):
                         _, _, lat, lon = pixel_to_coords(px, py, mi)
                         d = (lat - dyn['lat'])**2 + (lon - dyn['lon'])**2
                         if d < min_dist:
                             min_dist = d
-                            target_lat, target_lon = lat, lon
-                            found = True
+                            closest_idx = i
                     
-                    if found:
+                    if closest_idx != -1:
+                        # Lookahead to avoid perpendicular approach
+                        target_idx = min(len(ship.resampled_points) - 1, closest_idx + 50)
+                        t_px, t_py = ship.resampled_points[target_idx]
+                        _, _, target_lat, target_lon = pixel_to_coords(t_px, t_py, mi)
+
                         # Calculate heading to target
                         d_lat = target_lat - dyn['lat']
                         mid_lat = (dyn['lat'] + target_lat) / 2.0
@@ -473,8 +477,6 @@ class SimulationWorker(QObject):
         
         if t_current < t_start:
             sog = 0.0
-        
-        if is_end: sog = 0.0
         
         sog_kmh = sog * 1.852
         sog_mps = sog * 0.51444444

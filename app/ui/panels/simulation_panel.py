@@ -164,6 +164,13 @@ class SimulationPanel(QWidget):
         self.data_ready_flag = False
         self.suppress_close_warning = False
         self.blink_timers = {}
+        self.sim_time_limit = 3600
+        self.sim_ended = False
+        
+        # UI elements for simulation time
+        self._duration_spinbox = None
+        self._ext_duration_le = None
+        self._ext_start_btn = None
         
         # Fix for SimMapView right-click crash (MapView expects obj_combo)
         self.obj_combo = QComboBox(self)
@@ -247,6 +254,29 @@ class SimulationPanel(QWidget):
         top_layout.addWidget(QLabel("Speed(x):"))
         top_layout.addWidget(self.speed_spin)
         
+        # Duration
+        self.spin_sim_duration = QSpinBox()
+        self.spin_sim_duration.setRange(10, 864000)
+        self.spin_sim_duration.setValue(3600)
+        self.spin_sim_duration.setSuffix(" s")
+        self.spin_sim_duration.setToolTip("Simulation Duration")
+        top_layout.addWidget(QLabel("Duration:"))
+        top_layout.addWidget(self.spin_sim_duration)
+
+        # Extra Time
+        self.spin_extra_time = QSpinBox()
+        self.spin_extra_time.setRange(10, 36000)
+        self.spin_extra_time.setValue(600)
+        self.spin_extra_time.setSuffix(" s")
+        self.spin_extra_time.setEnabled(False)
+        self.btn_add_time = QPushButton("+")
+        self.btn_add_time.setFixedWidth(30)
+        self.btn_add_time.setEnabled(False)
+        self.btn_add_time.clicked.connect(self.action_add_extra_time)
+        top_layout.addWidget(QLabel("Extra:"))
+        top_layout.addWidget(self.spin_extra_time)
+        top_layout.addWidget(self.btn_add_time)
+
         # Follow
         self.combo_follow = QComboBox()
         self.combo_follow.addItem("None", -1)
@@ -1131,6 +1161,8 @@ class SimulationPanel(QWidget):
     def set_ui_locked(self, locked):
         self.ip_edit.setEnabled(not locked)
         self.port_edit.setEnabled(not locked)
+        self.spin_sim_duration.setEnabled(not locked)
+        # Extra time controls are managed separately based on sim state
 
     def action_start(self):
         if self.worker and self.worker.running and self.worker.paused:
@@ -1170,6 +1202,12 @@ class SimulationPanel(QWidget):
         if not active_ships:
             QMessageBox.warning(self, "Info", "No ships generated.")
             return
+            
+        # Set Simulation Limit
+        self.sim_time_limit = self.spin_sim_duration.value()
+        self.sim_ended = False
+        self.spin_extra_time.setEnabled(False)
+        self.btn_add_time.setEnabled(False)
 
         ip = self.ip_edit.text()
         try:
@@ -1199,6 +1237,15 @@ class SimulationPanel(QWidget):
         self.btn_export.setEnabled(False)
         self.set_ui_locked(True)
         self.data_ready_flag = False
+
+    def action_add_extra_time(self):
+        extra = self.spin_extra_time.value()
+        self.sim_time_limit += extra
+        self.sim_ended = False
+        self.spin_extra_time.setEnabled(False)
+        self.btn_add_time.setEnabled(False)
+        # User can now click Start/Resume to continue
+        self.btn_start.setEnabled(True)
 
     def action_capture(self):
         path, _ = QFileDialog.getSaveFileName(self, "Save Map Capture", "", "PNG Image (*.png);;JPEG Image (*.jpg)")
@@ -1240,6 +1287,8 @@ class SimulationPanel(QWidget):
         self.btn_export.setEnabled(self.data_ready_flag)
         self.set_ui_locked(False)
         self.stop_all_blinks()
+        self.spin_extra_time.setEnabled(False)
+        self.btn_add_time.setEnabled(False)
 
     def on_speed_change(self, val):
         if self.worker:
@@ -1285,6 +1334,18 @@ class SimulationPanel(QWidget):
         menu.exec(self.log_list.mapToGlobal(pos))
             
     def update_positions(self, pos_dict):
+        # Check Simulation Time Limit
+        if self.worker and not self.sim_ended:
+            if self.worker.current_time >= self.sim_time_limit:
+                self.sim_ended = True
+                self.worker.pause()
+                self.state_changed.emit("PAUSE")
+                self.btn_start.setEnabled(True)
+                self.btn_pause.setEnabled(False)
+                
+                self.spin_extra_time.setEnabled(True)
+                self.btn_add_time.setEnabled(True)
+
         # Update Trails
         settings = current_project.settings
         scale = self.view.transform().m11()
@@ -1566,7 +1627,11 @@ class SimulationPanel(QWidget):
         
         v1 = ship.node_velocities_kn[idx]
         v2 = ship.node_velocities_kn[idx+1]
-        spd = v1 + (v2 - v1) * alpha
+        
+        if alpha >= 1.0 and v2 == 0:
+            spd = v1 # Keep momentum at the end (Technically not 0)
+        else:
+            spd = v1 + (v2 - v1) * alpha
         
         # Calculate Heading
         _, _, lat1, lon1 = pixel_to_coords(p1[0], p1[1], mi)
