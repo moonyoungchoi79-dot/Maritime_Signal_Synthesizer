@@ -92,8 +92,11 @@ class EventScriptPanel(QWidget):
         self.combo_area = QComboBox() # For Area
         
         self.combo_action = QComboBox()
-        self.combo_action.addItems(["STOP", "CHANGE_SPEED", "CHANGE_HEADING"])
+        self.combo_action.addItems(["STOP", "CHANGE_SPEED", "CHANGE_HEADING", "MANEUVER"])
         self.combo_action.currentIndexChanged.connect(self.update_ui_state)
+        
+        self.combo_action_option = QComboBox()
+        self.combo_action_option.addItems(["ReturnToOriginalPath_ShortestDistance", "ChangeDestination_ToOriginalFinal"])
         
         self.combo_target = QComboBox()
         
@@ -110,6 +113,7 @@ class EventScriptPanel(QWidget):
         form.addRow("Area:", self.combo_area)
         
         form.addRow("Action Type:", self.combo_action)
+        form.addRow("Action Option:", self.combo_action_option)
         form.addRow("Target Ship:", self.combo_target)
         
         self.lbl_act_val = QLabel("Value:")
@@ -215,7 +219,7 @@ class EventScriptPanel(QWidget):
             # Condition
             cond_str = f"{e.condition_value}"
             if e.trigger_type == "TIME": cond_str += "s"
-            elif e.trigger_type in ["CPA_UNDER", "CPA_OVER"]: cond_str += "m"
+            elif e.trigger_type in ["CPA_UNDER", "CPA_OVER"]: cond_str += "NM"
             elif e.trigger_type in ["DIST_UNDER", "DIST_OVER"]: cond_str += "nm"
             self.event_table.setItem(row, 3, QTableWidgetItem(cond_str))
             
@@ -231,7 +235,15 @@ class EventScriptPanel(QWidget):
 
     def add_event(self):
         eid = str(uuid.uuid4())
-        evt = EventTrigger(id=eid, name="New Event", enabled=False)
+        base_name = "New Event"
+        name = base_name
+        count = 1
+        existing_names = {e.name for e in current_project.events}
+        while name in existing_names:
+            name = f"{base_name} {count}"
+            count += 1
+            
+        evt = EventTrigger(id=eid, name=name, enabled=False)
         current_project.events.append(evt)
         self.refresh_table()
         # Select new
@@ -244,19 +256,33 @@ class EventScriptPanel(QWidget):
         original_evt = next((e for e in current_project.events if e.id == eid), None)
         if not original_evt: return
         
+        base_name = f"{original_evt.name} (Copy)"
+        name = base_name
+        count = 1
+        existing_names = {e.name for e in current_project.events}
+        while name in existing_names:
+            name = f"{base_name} {count}"
+            count += 1
+        
         new_id = str(uuid.uuid4())
         new_evt = EventTrigger(
             id=new_id,
-            name=f"{original_evt.name} (Copy)",
+            name=name,
             enabled=False,
             trigger_type=original_evt.trigger_type,
             condition_value=original_evt.condition_value,
             action_type=original_evt.action_type,
             target_ship_idx=original_evt.target_ship_idx,
             action_value=original_evt.action_value,
+            # action_option will be handled if it exists on original_evt
             is_relative_to_end=original_evt.is_relative_to_end,
             reference_ship_idx=original_evt.reference_ship_idx
         )
+        if hasattr(original_evt, 'action_option'):
+            new_evt.action_option = original_evt.action_option
+        else:
+            new_evt.action_option = ""
+            
         current_project.events.append(new_evt)
         self.refresh_table()
         self.select_event_by_id(new_id)
@@ -318,6 +344,10 @@ class EventScriptPanel(QWidget):
             
         self.combo_action.setCurrentText(evt.action_type)
         
+        if hasattr(evt, 'action_option') and evt.action_option:
+            idx = self.combo_action_option.findText(evt.action_option)
+            if idx >= 0: self.combo_action_option.setCurrentIndex(idx)
+        
         idx = self.combo_target.findData(evt.target_ship_idx)
         if idx >= 0: self.combo_target.setCurrentIndex(idx)
         
@@ -364,8 +394,8 @@ class EventScriptPanel(QWidget):
             self.set_row_visible(self.spin_cpa, True)
             self.set_row_visible(self.combo_area, False)
             self.set_row_visible(self.combo_ref, True)
-            self.spin_cpa.setSuffix(" m")
-            self.spin_cpa.setRange(0, 50000)
+            self.spin_cpa.setSuffix(" NM")
+            self.spin_cpa.setRange(0, 1000)
         elif trig in ["DIST_UNDER", "DIST_OVER"]:
             self.set_row_visible(self.combo_time_ref, False)
             self.set_row_visible(self.time_input, False)
@@ -385,14 +415,22 @@ class EventScriptPanel(QWidget):
         if act == "STOP":
             self.lbl_act_val.setVisible(False)
             self.spin_action_val.setVisible(False)
+            self.set_row_visible(self.combo_action_option, False)
         elif act == "CHANGE_SPEED":
             self.lbl_act_val.setText("New Speed (kn):")
             self.lbl_act_val.setVisible(True)
             self.spin_action_val.setVisible(True)
+            self.set_row_visible(self.combo_action_option, False)
         elif act == "CHANGE_HEADING":
             self.lbl_act_val.setText("New Heading (deg):")
             self.lbl_act_val.setVisible(True)
             self.spin_action_val.setVisible(True)
+            self.set_row_visible(self.combo_action_option, False)
+        elif act == "MANEUVER":
+            self.lbl_act_val.setVisible(False)
+            self.spin_action_val.setVisible(False)
+            self.set_row_visible(self.combo_action_option, True)
+
 
     def set_row_visible(self, widget, visible):
         widget.setVisible(visible)
@@ -424,6 +462,7 @@ class EventScriptPanel(QWidget):
             evt.condition_value = self.combo_area.currentData()
             
         evt.action_type = self.combo_action.currentText()
+        evt.action_option = self.combo_action_option.currentText()
         evt.target_ship_idx = self.combo_target.currentData()
         evt.reference_ship_idx = self.combo_ref.currentData()
         evt.action_value = self.spin_action_val.value()

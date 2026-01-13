@@ -31,7 +31,8 @@ class Scenario:
             "target_ship_idx": e.target_ship_idx,
             "reference_ship_idx": getattr(e, 'reference_ship_idx', -1),
             "action_value": e.action_value,
-            "is_relative_to_end": getattr(e, 'is_relative_to_end', False)
+            "is_relative_to_end": getattr(e, 'is_relative_to_end', False),
+            "action_option": getattr(e, 'action_option', "")
         }
 
     def save_to_file(self, filepath):
@@ -66,6 +67,7 @@ class Scenario:
                 is_relative_to_end=e_data.get("is_relative_to_end", False),
                 reference_ship_idx=e_data.get("reference_ship_idx", -1)
             )
+            evt.action_option = e_data.get("action_option", "")
             scen.events.append(evt)
             
         return scen
