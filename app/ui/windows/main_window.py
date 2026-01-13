@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import (
     QHeaderView, QTreeWidget, QTreeWidgetItem, QTabWidget, QTabBar, QStyleOptionTab,
     QStackedWidget, QGroupBox, QFrame, QSplitter, QScrollArea, QMessageBox, QFileDialog,
     QColorDialog, QInputDialog, QDialog, QDialogButtonBox, QMenuBar, QMenu,
-    QToolBar, QStatusBar, QGraphicsView, QGraphicsScene, QGraphicsItem, QGraphicsPathItem,
+    QToolBar, QStatusBar, QGraphicsView, QGraphicsScene, QGraphicsItem, QGraphicsPathItem, QDockWidget,
     QGraphicsPolygonItem, QGraphicsEllipseItem, QGraphicsTextItem, QAbstractItemView,
     QAbstractSpinBox, QTextBrowser, QSizePolicy, QDateTimeEdit
 )
@@ -420,6 +420,20 @@ class MainWindow(QMainWindow):
         
         main_v.addWidget(self.tabs)
         
+        # --- Dockable Status Panel ---
+        self.dock_status = QDockWidget("Simulation Status", self)
+        self.dock_status.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
+        self.status_widget = QWidget()
+        self.dock_status.setWidget(self.status_widget)
+        
+        dock_layout = QVBoxLayout(self.status_widget)
+        self.lbl_active_scen = QLabel("Active Scenario: None")
+        self.list_active_events = QListWidget()
+        dock_layout.addWidget(self.lbl_active_scen)
+        dock_layout.addWidget(QLabel("Active Events:"))
+        dock_layout.addWidget(self.list_active_events)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dock_status)
+        
         self.tabs.currentChanged.connect(self.on_tab_changed)
         self.sim_panel.state_changed.connect(self.update_sim_tab_state)
         
@@ -427,6 +441,7 @@ class MainWindow(QMainWindow):
         self.lbl_coords.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         left_v.addWidget(self.lbl_coords)
         
+        self.sim_panel.simulation_status_updated.connect(self.update_simulation_status_dock)
         self.view.coord_changed.connect(self.update_status)
         self.update_stylesheets()
 
@@ -448,6 +463,14 @@ class MainWindow(QMainWindow):
         _, _, lat, lon = pixel_to_coords(px, py, mi)
         norm_lon = normalize_lon(lon)
         self.lbl_coords.setText(f"Lat: {lat:.5f} Lon: {norm_lon:.5f}")
+
+    def update_simulation_status_dock(self, scen_name, events):
+        self.lbl_active_scen.setText(f"Active Scenario: {scen_name}")
+        
+        # Only update if changed to avoid flickering/performance hit? 
+        # For now, simple clear/add is fine for status display
+        self.list_active_events.clear()
+        self.list_active_events.addItems(events)
 
     def update_info_strip(self):
         p = current_project

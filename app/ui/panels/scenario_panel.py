@@ -186,6 +186,11 @@ class ScenarioPanel(QWidget):
         eid = self.list_avail.item(row).data(Qt.ItemDataRole.UserRole)
         if not eid: return
         
+        # Check for duplicates in current scenario
+        if any(e.id == eid for e in app_state.current_scenario.events):
+            QMessageBox.warning(self, "Duplicate", "This event is already added to the scenario.")
+            return
+        
         # Find original event
         orig = next((e for e in current_project.events if e.id == eid), None)
         if not orig: return

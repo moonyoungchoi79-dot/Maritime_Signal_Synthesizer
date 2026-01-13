@@ -31,6 +31,7 @@ from app.ui.dialogs.rtg_dialog import RTGDialog
 
 class SimulationPanel(QWidget):
     state_changed = pyqtSignal(str)
+    simulation_status_updated = pyqtSignal(str, list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1148,7 +1149,43 @@ class SimulationPanel(QWidget):
             if follow_idx in pos_dict:
                 px, py, _ = pos_dict[follow_idx]
                 self.view.centerOn(px, py)
+        
+        self.emit_simulation_status()
         self.scene.update()
+
+    def emit_simulation_status(self):
+        scen_name = "None"
+        events_list = []
+        
+        # Project Events
+        for e in current_project.events:
+            if e.enabled:
+                ship = current_project.get_ship_by_idx(e.target_ship_idx)
+                s_name = ship.name if ship else "Unknown"
+                events_list.append(f"[Proj] {e.name} (Tgt: {s_name})")
+        
+        # Scenario Events
+        if app_state.current_scenario and app_state.current_scenario.enabled:
+            scen = app_state.current_scenario
+            scen_name = scen.name
+            
+            for e in scen.events:
+                if e.enabled:
+                    should_apply = False
+                    if scen.scope_mode == "ALL_SHIPS": should_apply = True
+                    elif scen.scope_mode == "OWN_ONLY":
+                        if e.target_ship_idx == current_project.settings.own_ship_idx: should_apply = True
+                    elif scen.scope_mode == "TARGET_ONLY":
+                        if e.target_ship_idx != current_project.settings.own_ship_idx: should_apply = True
+                    elif scen.scope_mode == "SELECTED_SHIPS":
+                        if e.target_ship_idx in scen.selected_ships: should_apply = True
+                    
+                    if should_apply:
+                        ship = current_project.get_ship_by_idx(e.target_ship_idx)
+                        s_name = ship.name if ship else "Unknown"
+                        events_list.append(f"[Scen] {e.name} (Tgt: {s_name})")
+                        
+        self.simulation_status_updated.emit(scen_name, events_list)
 
     def on_export_data(self, ready):
         self.data_ready_flag = ready
