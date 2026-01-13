@@ -339,10 +339,10 @@ class SimulationWorker(QObject):
             if opt == "ReturnToOriginalPath_ShortestDistance":
                 # Find closest point on original path
                 if ship.raw_points:
-                    mi = self.proj.map_info
+                    mi = self.proj.map_info # Use project map info
                     min_dist = float('inf')
                     target_lat, target_lon = dyn['lat'], dyn['lon']
-                    
+                    found = False
                     # Simple search through resampled points
                     for (px, py) in ship.resampled_points:
                         _, _, lat, lon = pixel_to_coords(px, py, mi)
@@ -350,16 +350,34 @@ class SimulationWorker(QObject):
                         if d < min_dist:
                             min_dist = d
                             target_lat, target_lon = lat, lon
+                            found = True
+                    
+                    if found:
+                        # Calculate heading to target
+                        d_lat = target_lat - dyn['lat']
+                        mid_lat = (dyn['lat'] + target_lat) / 2.0
+                        d_lon = (target_lon - dyn['lon']) * math.cos(math.radians(mid_lat))
+                        
+                        if abs(d_lat) > 1e-9 or abs(d_lon) > 1e-9:
+                            hdg = math.degrees(math.atan2(d_lon, d_lat))
+                            dyn['hdg'] = (hdg + 360) % 360
+                    
+            elif opt == "ChangeDestination_ToOriginalFinal":
+                if ship.resampled_points:
+                    mi = self.proj.map_info
+                    # Last point
+                    end_px, end_py = ship.resampled_points[-1]
+                    _, _, target_lat, target_lon = pixel_to_coords(end_px, end_py, mi)
                     
                     # Calculate heading to target
                     d_lat = target_lat - dyn['lat']
-                    d_lon = (target_lon - dyn['lon']) * math.cos(math.radians((dyn['lat'] + target_lat)/2))
-                    hdg = math.degrees(math.atan2(d_lon, d_lat))
-                    dyn['hdg'] = (hdg + 360) % 360
+                    mid_lat = (dyn['lat'] + target_lat) / 2.0
+                    d_lon = (target_lon - dyn['lon']) * math.cos(math.radians(mid_lat))
                     
-            elif opt == "ChangeDestination_ToOriginalFinal":
-                # Not fully implemented logic for full path re-routing, but heading change to final point
-                pass # Logic would be similar: find final point, set heading.
+                    if abs(d_lat) > 1e-9 or abs(d_lon) > 1e-9:
+                        hdg = math.degrees(math.atan2(d_lon, d_lat))
+                        dyn['hdg'] = (hdg + 360) % 360
+
 
     def get_state_at_step(self, ship, m):
         t_current = m * self.proj.unit_time

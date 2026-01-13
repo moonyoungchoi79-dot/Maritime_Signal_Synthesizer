@@ -17,6 +17,7 @@ from app.ui.widgets.time_input_widget import TimeInputWidget
 import app.core.state as app_state
 
 class ScenarioPanel(QWidget):
+    data_changed = pyqtSignal()
     def __init__(self, parent=None):
         super().__init__(parent)
         
@@ -453,6 +454,8 @@ class ScenarioPanel(QWidget):
         if proj_evt:
             proj_evt.enabled = is_checked
 
+        self.data_changed.emit()
+
     def on_scen_list_reordered(self, parent, start, end, destination, row):
         if not app_state.current_scenario: return
         new_events = []
@@ -767,6 +770,7 @@ class ScenarioPanel(QWidget):
 
         self.is_dirty = False
         self.editor_group.setTitle("Selected Event Details")
+        self.data_changed.emit()
 
     def mark_dirty(self):
         if not self.loading_event:

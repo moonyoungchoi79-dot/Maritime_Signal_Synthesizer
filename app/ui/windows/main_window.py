@@ -121,6 +121,7 @@ class MainWindow(QMainWindow):
         self.speed_pop = SpeedGeneratorPanel(self)
         self.event_panel = EventScriptPanel(self)
         self.scenario_panel = ScenarioPanel(self)
+        self.scenario_panel.data_changed.connect(self.on_data_changed)
         
         self.speed_pop.request_generate.connect(self.generate_speed_logic)
         
@@ -837,7 +838,7 @@ class MainWindow(QMainWindow):
         f = QFormLayout(d)
         spin_spd = QDoubleSpinBox()
         spin_spd.setRange(0, 1000)
-        prev_spd = 5.0
+        prev_spd = 100.0
         if ship.raw_speeds:
              last_idx = len(ship.raw_points) - 1
              if last_idx in ship.raw_speeds:

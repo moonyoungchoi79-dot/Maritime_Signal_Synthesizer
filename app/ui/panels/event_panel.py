@@ -14,6 +14,7 @@ from PyQt6.QtGui import (
 )
 from app.core.models.project import current_project, EventTrigger
 from app.ui.widgets.time_input_widget import TimeInputWidget
+from app.ui.panels.scenario_panel import ScenarioPanel
 
 class EventScriptPanel(QWidget):
     def __init__(self, parent=None):
@@ -84,7 +85,7 @@ class EventScriptPanel(QWidget):
         
         # CPA Distance Input
         self.spin_cpa = QDoubleSpinBox()
-        self.spin_cpa.setRange(0, 50000)
+        self.spin_cpa.setRange(0, 10000000)
         self.spin_cpa.setSuffix(" nm")
         
         self.combo_ref = QComboBox()
@@ -396,7 +397,7 @@ class EventScriptPanel(QWidget):
             self.set_row_visible(self.combo_area, False)
             self.set_row_visible(self.combo_ref, True)
             self.spin_cpa.setSuffix(" NM")
-            self.spin_cpa.setRange(0, 1000)
+            self.spin_cpa.setRange(0, 10000000)
         elif trig in ["DIST_UNDER", "DIST_OVER"]:
             self.set_row_visible(self.combo_time_ref, False)
             self.set_row_visible(self.time_input, False)
@@ -478,3 +479,10 @@ class EventScriptPanel(QWidget):
         self.refresh_table()
         # Restore selection
         self.select_event_by_id(new_id)
+        
+        # Sync with Scenario Panel if available
+        main_win = self.window()
+        if hasattr(main_win, 'scenario_panel') and isinstance(main_win.scenario_panel, ScenarioPanel):
+            main_win.scenario_panel.refresh_ui()
+        if hasattr(main_win, 'data_changed'):
+            main_win.data_changed.emit()
