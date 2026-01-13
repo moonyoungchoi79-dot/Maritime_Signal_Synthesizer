@@ -110,6 +110,7 @@ class EventScriptPanel(QWidget):
         form.addRow("Time Ref:", self.combo_time_ref)
         form.addRow("Time:", self.time_input)
         form.addRow("CPA Dist:", self.spin_cpa)
+        form.addRow("Ref Ship:", self.combo_ref)
         form.addRow("Area:", self.combo_area)
         
         form.addRow("Action Type:", self.combo_action)
