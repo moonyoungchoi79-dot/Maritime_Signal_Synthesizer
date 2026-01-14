@@ -1217,7 +1217,7 @@ class SimulationPanel(QWidget):
             return
             
         self.worker_thread = QThread()
-        self.worker = SimulationWorker(ip, port, self.speed_spin.value())
+        self.worker = SimulationWorker(ip, port, self.speed_spin.value(), self.spin_sim_duration.value())
         self.worker.moveToThread(self.worker_thread)
         self.worker_thread.started.connect(self.worker.run)
         self.worker.finished.connect(self.worker_thread.quit)
@@ -1241,6 +1241,8 @@ class SimulationPanel(QWidget):
     def action_add_extra_time(self):
         extra = self.spin_extra_time.value()
         self.sim_time_limit += extra
+        if self.worker:
+            self.worker.update_duration(self.sim_time_limit)
         self.sim_ended = False
         self.spin_extra_time.setEnabled(False)
         self.btn_add_time.setEnabled(False)

@@ -24,11 +24,12 @@ class SimulationWorker(QObject):
     random_targets_generated = pyqtSignal()
     event_triggered = pyqtSignal(str, int)
     
-    def __init__(self, ip, port, speed_mult):
+    def __init__(self, ip, port, speed_mult, duration_sec):
         super().__init__()
         self.ip = ip
         self.port = port
         self.speed_mult = speed_mult
+        self.duration_sec = duration_sec
         self.running = True
         self.paused = False
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -46,6 +47,7 @@ class SimulationWorker(QObject):
         self.triggered_events = set()
         self.dynamic_ships = {} # {ship_idx: {'lat':, 'lon':, 'spd':, 'hdg':, 'last_update_time':}}
         self.events = []
+        self.max_steps = 0
 
     def run(self):
         try:
@@ -74,10 +76,9 @@ class SimulationWorker(QObject):
 
             own_idx = self.proj.settings.own_ship_idx
             own_ship = self.proj.get_ship_by_idx(own_idx)
-            max_dur = own_ship.total_duration_sec if own_ship else 0.0
             
             dT = self.proj.unit_time
-            M_global = math.ceil(max_dur / dT)
+            self.max_steps = math.ceil(self.duration_sec / dT)
             
             self.last_sps_update_time = time.time() # Initialize here for accurate first calculation
             self.last_sps_update_m = 0             # Initialize here for accurate first calculation
@@ -85,7 +86,7 @@ class SimulationWorker(QObject):
             mi = self.proj.map_info
 
             m = 0
-            while m <= M_global:
+            while m <= self.max_steps:
                 if not self.running: break
                 self.m = m
                 
@@ -234,6 +235,9 @@ class SimulationWorker(QObject):
 
     def update_speed(self, mult):
         self.speed_mult = mult
+
+    def update_duration(self, new_duration):
+        self.max_steps = math.ceil(new_duration / self.proj.unit_time)
 
     def check_events(self, t_current):
         for evt in self.events:
@@ -473,12 +477,6 @@ class SimulationWorker(QObject):
                 "elapsed_sec": t_current
             }
 
-        if t_current >= ship.total_duration_sec:
-             t_current = ship.total_duration_sec
-             is_end = True
-        else:
-             is_end = False
-             
         # Use cached numpy array if available, otherwise fallback (and cache)
         times = self.cached_times.get(ship.idx)
         if times is None:
@@ -490,7 +488,11 @@ class SimulationWorker(QObject):
              times = np.array(ship.cumulative_time)
              self.cached_times[ship.idx] = times
              
-        idx = np.searchsorted(times, t_current, side='right') - 1
+        # Clamp t_current for interpolation to the actual path duration
+        # This ensures that if simulation runs longer than path, ship stays at last point
+        t_interp = min(t_current, times[-1])
+        
+        idx = np.searchsorted(times, t_interp, side='right') - 1
         if idx < 0: idx = 0
         if idx >= len(times) - 1: idx = len(times) - 2
         
@@ -500,7 +502,7 @@ class SimulationWorker(QObject):
         if t_current < t_start:
             alpha = 0.0
         elif t_end > t_start:
-            alpha = (t_current - t_start) / (t_end - t_start)
+            alpha = (t_interp - t_start) / (t_end - t_start)
         else:
             alpha = 0.0
             
@@ -517,7 +519,7 @@ class SimulationWorker(QObject):
         v2 = ship.node_velocities_kn[idx+1]
         sog = v1 + (v2 - v1) * alpha
         
-        if t_current < t_start:
+        if t_current < t_start or t_current > times[-1]:
             sog = 0.0
         
         sog_kmh = sog * 1.852

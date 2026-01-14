@@ -141,6 +141,19 @@ class SimulationWindow(QWidget):
         grid.addWidget(QLabel("Time Remaining:"), 2, 2) # Moved to row 2
         grid.addWidget(self.eta_label, 2, 3)
         
+        grid.addWidget(QLabel("Total Time (s):"), 3, 0)
+        self.duration_spin = QDoubleSpinBox()
+        self.duration_spin.setRange(0, 9999999)
+        self.duration_spin.setDecimals(1)
+        self.duration_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.duration_spin.valueChanged.connect(self.on_duration_changed)
+        grid.addWidget(self.duration_spin, 3, 1)
+        
+        self.btn_add_time = QPushButton("+10m")
+        self.btn_add_time.setEnabled(True)
+        self.btn_add_time.clicked.connect(self.action_add_time)
+        grid.addWidget(self.btn_add_time, 3, 2)
+
         # Layout Ratio 1:2
         grid.setColumnStretch(1, 1)
         grid.setColumnStretch(3, 2)
@@ -215,6 +228,14 @@ class SimulationWindow(QWidget):
         
         self.draw_static_map()
         self.update_follow_combo()
+
+    def on_duration_changed(self, val):
+        if self.worker:
+            self.worker.update_duration(val)
+
+    def action_add_time(self):
+        val = self.duration_spin.value()
+        self.duration_spin.setValue(val + 600)
 
     def generate_random_targets_logic(self, own_ship, R_nm, N_ai, N_ra, N_both):
         # Set deterministic seed for RTG
@@ -660,6 +681,13 @@ class SimulationWindow(QWidget):
         self.ship_indicators.clear()
         self.trail_items.clear() # Cleared from scene, need to rebuild if trails exist
         
+        # Sync Duration Spin (Only initialize if 0 to avoid overwriting user input)
+        own_ship = current_project.get_ship_by_idx(current_project.settings.own_ship_idx)
+        if own_ship and own_ship.is_generated and self.duration_spin.value() == 0:
+            self.duration_spin.blockSignals(True)
+            self.duration_spin.setValue(own_ship.total_duration_sec)
+            self.duration_spin.blockSignals(False)
+        
         for ship in current_project.ships:
              if not ship.raw_points: continue 
              
@@ -854,7 +882,7 @@ class SimulationWindow(QWidget):
             return
             
         self.worker_thread = QThread()
-        self.worker = SimulationWorker(ip, port, self.speed_spin.value())
+        self.worker = SimulationWorker(ip, port, self.speed_spin.value(), self.duration_spin.value())
         self.worker.moveToThread(self.worker_thread)
         self.worker_thread.started.connect(self.worker.run)
         self.worker.signal_generated.connect(self.append_log)
@@ -871,6 +899,8 @@ class SimulationWindow(QWidget):
         self.btn_stop.setEnabled(True)
         self.btn_export.setEnabled(False)
         self.set_ui_locked(True)
+        self.duration_spin.setEnabled(True) # Allow duration edit during run
+        self.btn_add_time.setEnabled(True)
         self.data_ready_flag = False
 
     def action_pause(self):
@@ -905,6 +935,8 @@ class SimulationWindow(QWidget):
         self.btn_stop.setEnabled(False)
         self.btn_export.setEnabled(self.data_ready_flag)
         self.set_ui_locked(False)
+        self.duration_spin.setEnabled(True)
+        self.btn_add_time.setEnabled(True)
 
     def on_speed_change(self, val):
         if self.worker:
