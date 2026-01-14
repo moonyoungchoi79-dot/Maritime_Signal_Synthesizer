@@ -1083,6 +1083,8 @@ class MainWindow(QMainWindow):
             current_project.map_info.center_lat = lat
             current_project.map_info.center_lon = lon
             current_project.seed = int(datetime.datetime.now().timestamp())
+            current_project.settings.path_thickness = 3
+            current_project.settings.traveled_path_thickness = 3
             
             self.save_project() 
             self.update_ui_state(True)
@@ -1129,8 +1131,8 @@ class MainWindow(QMainWindow):
             p.settings.btn_rtg_color = s.get("btn_rtg_color", "#E57373")
             p.settings.random_color = s.get("random_color", "#FFCDD2")
             p.settings.random_target_speed_variance = s.get("random_target_speed_variance", 1.0)
-            p.settings.path_thickness = s.get("path_thickness", 2)
-            p.settings.traveled_path_thickness = s.get("traveled_path_thickness", 4)
+            p.settings.path_thickness = s.get("path_thickness", 3)
+            p.settings.traveled_path_thickness = s.get("traveled_path_thickness", 3)
             p.settings.dropout_probs = s.get("dropout_probs", {})
             p.settings.theme_mode = s.get("theme_mode", "System")
             

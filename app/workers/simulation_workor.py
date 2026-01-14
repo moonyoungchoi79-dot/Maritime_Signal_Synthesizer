@@ -337,35 +337,7 @@ class SimulationWorker(QObject):
         elif evt.action_type == "MANEUVER":
             opt = getattr(evt, 'action_option', "")
             if opt == "ReturnToOriginalPath_ShortestDistance":
-                # Find closest point on original path
-                if ship.resampled_points:
-                    mi = self.proj.map_info # Use project map info
-                    min_dist = float('inf')
-                    closest_idx = -1
-                    
-                    # Simple search through resampled points
-                    for i, (px, py) in enumerate(ship.resampled_points):
-                        _, _, lat, lon = pixel_to_coords(px, py, mi)
-                        d = (lat - dyn['lat'])**2 + (lon - dyn['lon'])**2
-                        if d < min_dist:
-                            min_dist = d
-                            closest_idx = i
-                    
-                    if closest_idx != -1:
-                        # Lookahead to avoid perpendicular approach
-                        target_idx = min(len(ship.resampled_points) - 1, closest_idx + 50)
-                        t_px, t_py = ship.resampled_points[target_idx]
-                        _, _, target_lat, target_lon = pixel_to_coords(t_px, t_py, mi)
-
-                        # Calculate heading to target
-                        d_lat = target_lat - dyn['lat']
-                        mid_lat = (dyn['lat'] + target_lat) / 2.0
-                        d_lon = (target_lon - dyn['lon']) * math.cos(math.radians(mid_lat))
-                        
-                        if abs(d_lat) > 1e-7 or abs(d_lon) > 1e-7:
-                            hdg = math.degrees(math.atan2(d_lon, d_lat))
-                            dyn['hdg'] = (hdg + 360) % 360
-                    
+                dyn['mode'] = 'RETURN_TO_PATH'
             elif opt == "ChangeDestination_ToOriginalFinal":
                 if ship.resampled_points:
                     mi = self.proj.map_info
@@ -391,6 +363,76 @@ class SimulationWorker(QObject):
             dyn = self.dynamic_ships[ship.idx]
             dt = t_current - dyn['last_update_time']
             
+            # --- Guidance Logic for Maneuvers ---
+            mi = self.proj.map_info
+            if dyn.get('mode') == 'RETURN_TO_PATH':
+                c_lat, c_lon = dyn['lat'], dyn['lon']
+                c_px, c_py = coords_to_pixel(c_lat, c_lon, mi)
+                
+                best_idx = -1
+                best_dist_sq = float('inf')
+                
+                for i, (px, py) in enumerate(ship.resampled_points):
+                    d2 = (px - c_px)**2 + (py - c_py)**2
+                    if d2 < best_dist_sq:
+                        best_dist_sq = d2
+                        best_idx = i
+                
+                if best_idx != -1:
+                    t_px, t_py = ship.resampled_points[best_idx]
+                    _, _, t_lat, t_lon = pixel_to_coords(t_px, t_py, mi)
+                    dist_m = haversine_distance(c_lat, c_lon, t_lat, t_lon)
+                    
+                    if dist_m < 30: # 30m threshold to snap to path following
+                        dyn['mode'] = 'FOLLOW_PATH_GEOMETRY'
+                        dyn['current_path_idx'] = best_idx
+                    else:
+                        # Steer to closest point (shortest distance)
+                        target_idx = min(len(ship.resampled_points)-1, best_idx + 1)
+                        t_px, t_py = ship.resampled_points[target_idx]
+                        _, _, target_lat, target_lon = pixel_to_coords(t_px, t_py, mi)
+                        
+                        d_lat = target_lat - c_lat
+                        mid_lat = (c_lat + target_lat) / 2.0
+                        d_lon = (target_lon - c_lon) * math.cos(math.radians(mid_lat))
+                        
+                        if abs(d_lat) > 1e-9 or abs(d_lon) > 1e-9:
+                            req_hdg = math.degrees(math.atan2(d_lon, d_lat))
+                            dyn['hdg'] = (req_hdg + 360) % 360
+
+            elif dyn.get('mode') == 'FOLLOW_PATH_GEOMETRY':
+                idx = dyn.get('current_path_idx', 0)
+                c_lat, c_lon = dyn['lat'], dyn['lon']
+                c_px, c_py = coords_to_pixel(c_lat, c_lon, mi)
+                
+                best_idx = idx
+                min_d = float('inf')
+                search_limit = min(len(ship.resampled_points), idx + 200)
+                
+                for i in range(idx, search_limit):
+                    px, py = ship.resampled_points[i]
+                    d = (px - c_px)**2 + (py - c_py)**2
+                    if d < min_d:
+                        min_d = d
+                        best_idx = i
+                
+                dyn['current_path_idx'] = best_idx
+                target_idx = min(len(ship.resampled_points)-1, best_idx + 5)
+                
+                if target_idx > best_idx:
+                    t_px, t_py = ship.resampled_points[target_idx]
+                    _, _, target_lat, target_lon = pixel_to_coords(t_px, t_py, mi)
+                    
+                    d_lat = target_lat - c_lat
+                    mid_lat = (c_lat + target_lat) / 2.0
+                    d_lon = (target_lon - c_lon) * math.cos(math.radians(mid_lat))
+                    
+                    if abs(d_lat) > 1e-9 or abs(d_lon) > 1e-9:
+                         req_hdg = math.degrees(math.atan2(d_lon, d_lat))
+                         dyn['hdg'] = (req_hdg + 360) % 360
+                elif best_idx == len(ship.resampled_points)-1:
+                    dyn['spd'] = 0.0
+
             if dt > 0:
                 # Update position based on current speed/heading
                 # 1 knot = 1 nm/h = 1.852 km/h = 0.5144 m/s

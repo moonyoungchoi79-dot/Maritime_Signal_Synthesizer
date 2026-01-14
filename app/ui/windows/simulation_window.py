@@ -932,7 +932,20 @@ class SimulationWindow(QWidget):
             
             path_item = self.trail_items[idx]
             pp = QPainterPath()
-            pp.addPolygon(QPolygonF(self.ship_trails[idx]))
+            
+            # Handle Date Line Crossing (Wrap-around)
+            points = self.ship_trails[idx]
+            if points:
+                pp.moveTo(points[0])
+                mi = current_project.map_info
+                threshold = 180 * mi.pixels_per_degree  # Threshold to detect wrap-around
+                
+                for i in range(1, len(points)):
+                    if abs(points[i].x() - points[i-1].x()) > threshold:
+                        pp.moveTo(points[i])
+                    else:
+                        pp.lineTo(points[i])
+
             path_item.setPath(pp)
             
             if idx == settings.own_ship_idx:
