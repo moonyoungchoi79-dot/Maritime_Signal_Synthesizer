@@ -1582,6 +1582,7 @@ class MainWindow(QMainWindow):
             self.sim_panel.refresh_tables()
         self.speed_pop.refresh_table()
         self.event_panel.refresh_all()
+        self.scenario_panel.refresh_ui()
 
     def update_ui_state(self, enabled):
         self.view.setEnabled(enabled)
