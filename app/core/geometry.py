@@ -142,13 +142,106 @@ def lla_to_ecef(lat, lon, alt):
 def ecef_to_lla(x, y, z):
     p = np.sqrt(x**2 + y**2)
     lon_rad = np.arctan2(y, x)
-    
+
     # Bowring's formula for latitude
     beta = np.arctan2(z, (1 - WGS84_F) * p)
     lat_rad = np.arctan2(z + (WGS84_A * WGS84_E_SQ / (1 - WGS84_F)) * np.sin(beta)**3,
                         p - (WGS84_A * WGS84_E_SQ) * np.cos(beta)**3)
-    
+
     n = WGS84_A / np.sqrt(1 - WGS84_E_SQ * np.sin(lat_rad)**2)
     alt = p / np.cos(lat_rad) - n
-    
+
     return np.degrees(lat_rad), np.degrees(lon_rad), alt
+
+
+# =============================================================================
+# ECEF-based calculation functions for internal simulation
+# =============================================================================
+
+def ecef_distance(x1, y1, z1, x2, y2, z2):
+    """Calculate Euclidean distance between two ECEF points in meters."""
+    return math.sqrt((x2 - x1)**2 + (y2 - y1)**2 + (z2 - z1)**2)
+
+
+def ecef_move(x, y, z, heading_deg, distance_m):
+    """
+    Move from ECEF position by distance along heading.
+    Heading is true north bearing (0=N, 90=E, 180=S, 270=W).
+    Returns new ECEF coordinates.
+    """
+    # Convert current ECEF to LLA
+    lat, lon, alt = ecef_to_lla(x, y, z)
+
+    # Calculate new LLA position using spherical approximation
+    lat_rad = math.radians(lat)
+    lon_rad = math.radians(lon)
+    heading_rad = math.radians(heading_deg)
+
+    # Angular distance
+    R = 6371000.0  # Earth radius in meters
+    angular_dist = distance_m / R
+
+    # New latitude
+    new_lat_rad = math.asin(
+        math.sin(lat_rad) * math.cos(angular_dist) +
+        math.cos(lat_rad) * math.sin(angular_dist) * math.cos(heading_rad)
+    )
+
+    # New longitude
+    new_lon_rad = lon_rad + math.atan2(
+        math.sin(heading_rad) * math.sin(angular_dist) * math.cos(lat_rad),
+        math.cos(angular_dist) - math.sin(lat_rad) * math.sin(new_lat_rad)
+    )
+
+    new_lat = math.degrees(new_lat_rad)
+    new_lon = math.degrees(new_lon_rad)
+
+    # Normalize longitude
+    new_lon = normalize_lon(new_lon)
+
+    # Convert back to ECEF
+    return lla_to_ecef(new_lat, new_lon, alt)
+
+
+def ecef_heading(x1, y1, z1, x2, y2, z2):
+    """
+    Calculate heading (bearing) from point 1 to point 2.
+    Returns heading in degrees (0-360, 0=N, 90=E).
+    """
+    lat1, lon1, _ = ecef_to_lla(x1, y1, z1)
+    lat2, lon2, _ = ecef_to_lla(x2, y2, z2)
+
+    lat1_rad = math.radians(lat1)
+    lat2_rad = math.radians(lat2)
+    d_lon = math.radians(lon2 - lon1)
+
+    x = math.sin(d_lon) * math.cos(lat2_rad)
+    y = math.cos(lat1_rad) * math.sin(lat2_rad) - \
+        math.sin(lat1_rad) * math.cos(lat2_rad) * math.cos(d_lon)
+
+    heading = math.degrees(math.atan2(x, y))
+    return (heading + 360) % 360
+
+
+def ecef_interpolate(x1, y1, z1, x2, y2, z2, fraction):
+    """
+    Linear interpolation between two ECEF points.
+    fraction: 0.0 = point1, 1.0 = point2
+    """
+    x = x1 + (x2 - x1) * fraction
+    y = y1 + (y2 - y1) * fraction
+    z = z1 + (z2 - z1) * fraction
+    return x, y, z
+
+
+def path_points_to_ecef(points, mi):
+    """
+    Convert list of pixel points to ECEF coordinates.
+    Returns list of (x, y, z) tuples.
+    """
+    ecef_points = []
+    for px, py in points:
+        _, _, lat, lon = pixel_to_coords(px, py, mi)
+        x, y, z = lla_to_ecef(lat, lon, 0.0)
+        ecef_points.append((x, y, z))
+    return ecef_points

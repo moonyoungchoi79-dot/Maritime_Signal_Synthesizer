@@ -32,7 +32,7 @@ from app.core.utils import sanitize_filename
 from app.core.geometry import coords_to_pixel, pixel_to_coords, normalize_lon
 from app.core.nmea import parse_nmea_fields
 from app.ui.map.sim_map_view import SimMapView
-from app.workers.simulation_workor import SimulationWorker
+from app.workers.simulation_worker import SimulationWorker
 from app.ui.dialogs.rtg_dialog import RTGDialog
 from app.ui.widgets.time_input_widget import TimeInputWidget
 import app.core.state as app_state
@@ -305,8 +305,8 @@ class SimulationWindow(QWidget):
             # Clamp Start Lat
             start_lat = max(-89.9, min(89.9, start_lat))
             
-            # 3.5 Speed Model
-            variance = current_project.settings.random_target_speed_variance
+            # 3.5 Speed Model (unified variance for wind/current effects)
+            variance = current_project.settings.speed_variance
             sigma = math.sqrt(variance)
             spd = abs(random.gauss(own_spd_kn, sigma)) # Abs as per requirement
             if spd < 0.1: spd = 0.1

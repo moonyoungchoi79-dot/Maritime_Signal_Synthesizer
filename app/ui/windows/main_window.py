@@ -1100,7 +1100,7 @@ class MainWindow(QMainWindow):
             p.settings.btn_sim_color = s.get("btn_sim_color", "#2196F3")
             p.settings.btn_rtg_color = s.get("btn_rtg_color", "#E57373")
             p.settings.random_color = s.get("random_color", "#FFCDD2")
-            p.settings.random_target_speed_variance = s.get("random_target_speed_variance", 1.0)
+            p.settings.speed_variance = s.get("speed_variance", 1.0)
             p.settings.path_thickness = s.get("path_thickness", 3)
             p.settings.traveled_path_thickness = s.get("traveled_path_thickness", 3)
             p.settings.dropout_probs = s.get("dropout_probs", {})
@@ -1344,13 +1344,12 @@ class MainWindow(QMainWindow):
                 "btn_sim_color": p.settings.btn_sim_color,
                 "btn_rtg_color": p.settings.btn_rtg_color,
                 "random_color": p.settings.random_color,
-                "random_target_speed_variance": p.settings.random_target_speed_variance,
+                "speed_variance": p.settings.speed_variance,
                 "path_thickness": p.settings.path_thickness,
                 "traveled_path_thickness": p.settings.traveled_path_thickness,
                 "mask_color": p.settings.mask_color,
                 "dropout_probs": p.settings.dropout_probs,
-                "theme_mode": p.settings.theme_mode,
-                "simulation_speed_variance": getattr(p.settings, "simulation_speed_variance", 0.1)
+                "theme_mode": p.settings.theme_mode
             },
             # Minimal info in project.json, full data in subfolders/files
             "ships": ships_list, # Keeping for backward compat or easy loading

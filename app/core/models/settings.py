@@ -15,17 +15,16 @@ class ProjectSettings:
     btn_speed_color: str = "#FF9800"
     btn_sim_color: str = "#2196F3"
     btn_rtg_color: str = "#FFA500"
-    random_target_speed_variance: float = 5.0
     rtg_zigzag_enabled: bool = True
     rtg_zigzag_turns: int = 2
     rtg_zigzag_angle_limit: float = 60.0
     random_color: str = "#B8860B"
     mask_color: str = "#404040"
-    
+
     theme_mode: str = "System" # "System", "Light", "Dark"
-    
+
+    # Unified speed variance for wind/current effects (shared by RTG and simulation)
     speed_variance: float = 1.0
-    simulation_speed_variance: float = 0.1
     
     own_ship_idx: int = 0
     include_gp_signal: bool = False 
