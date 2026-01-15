@@ -1,9 +1,16 @@
 import os
+import sys
 import math
 import csv
 import random
 import datetime
 import numpy as np
+
+# Ensure project root is in sys.path when running this file directly
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.abspath(os.path.join(current_dir, "../../../"))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QLabel, QLineEdit, 
@@ -27,6 +34,7 @@ from app.core.nmea import parse_nmea_fields
 from app.ui.map.sim_map_view import SimMapView
 from app.workers.simulation_workor import SimulationWorker
 from app.ui.dialogs.rtg_dialog import RTGDialog
+from app.ui.widgets.time_input_widget import TimeInputWidget
 import app.core.state as app_state
 
 class SimulationWindow(QWidget):
@@ -83,6 +91,15 @@ class SimulationWindow(QWidget):
             return
 
         current_project.ships = [s for s in current_project.ships if s.idx < 1000]
+        
+        # Clear trails for removed ships
+        active_idxs = {s.idx for s in current_project.ships}
+        to_remove = [idx for idx in self.ship_trails.keys() if idx not in active_idxs]
+        for idx in to_remove:
+            del self.ship_trails[idx]
+            if idx in self.trail_items:
+                self.scene.removeItem(self.trail_items[idx])
+                del self.trail_items[idx]
         
         self.refresh_tables()
         self.draw_static_map()
@@ -142,12 +159,9 @@ class SimulationWindow(QWidget):
         grid.addWidget(self.eta_label, 2, 3)
         
         grid.addWidget(QLabel("Total Time (s):"), 3, 0)
-        self.duration_spin = QDoubleSpinBox()
-        self.duration_spin.setRange(0, 9999999)
-        self.duration_spin.setDecimals(1)
-        self.duration_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-        self.duration_spin.valueChanged.connect(self.on_duration_changed)
-        grid.addWidget(self.duration_spin, 3, 1)
+        self.duration_input = TimeInputWidget()
+        self.duration_input.valueChanged.connect(self.on_duration_changed)
+        grid.addWidget(self.duration_input, 3, 1)
         
         self.btn_add_time = QPushButton("+10m")
         self.btn_add_time.setEnabled(True)
@@ -234,8 +248,8 @@ class SimulationWindow(QWidget):
             self.worker.update_duration(val)
 
     def action_add_time(self):
-        val = self.duration_spin.value()
-        self.duration_spin.setValue(val + 600)
+        val = self.duration_input.get_seconds()
+        self.duration_input.set_seconds(val + 600)
 
     def generate_random_targets_logic(self, own_ship, R_nm, N_ai, N_ra, N_both):
         # Set deterministic seed for RTG
@@ -683,10 +697,10 @@ class SimulationWindow(QWidget):
         
         # Sync Duration Spin (Only initialize if 0 to avoid overwriting user input)
         own_ship = current_project.get_ship_by_idx(current_project.settings.own_ship_idx)
-        if own_ship and own_ship.is_generated and self.duration_spin.value() == 0:
-            self.duration_spin.blockSignals(True)
-            self.duration_spin.setValue(own_ship.total_duration_sec)
-            self.duration_spin.blockSignals(False)
+        if own_ship and own_ship.is_generated and self.duration_input.get_seconds() == 0:
+            self.duration_input.blockSignals(True)
+            self.duration_input.set_seconds(own_ship.total_duration_sec)
+            self.duration_input.blockSignals(False)
         
         for ship in current_project.ships:
              if not ship.raw_points: continue 
@@ -705,7 +719,18 @@ class SimulationWindow(QWidget):
              
              path = QGraphicsPathItem()
              pp = QPainterPath()
-             pp.addPolygon(QPolygonF([QPointF(x,y) for x,y in ship.raw_points]))
+             
+             points = [QPointF(x,y) for x,y in ship.raw_points]
+             if points:
+                 pp.moveTo(points[0])
+                 mi = current_project.map_info
+                 threshold = 180 * mi.pixels_per_degree
+                 for i in range(1, len(points)):
+                     if abs(points[i].x() - points[i-1].x()) > threshold:
+                         pp.moveTo(points[i])
+                     else:
+                         pp.lineTo(points[i])
+             
              path.setPath(pp)
              
              width = current_project.settings.path_thickness
@@ -882,7 +907,7 @@ class SimulationWindow(QWidget):
             return
             
         self.worker_thread = QThread()
-        self.worker = SimulationWorker(ip, port, self.speed_spin.value(), self.duration_spin.value())
+        self.worker = SimulationWorker(ip, port, self.speed_spin.value(), self.duration_input.get_seconds())
         self.worker.moveToThread(self.worker_thread)
         self.worker_thread.started.connect(self.worker.run)
         self.worker.signal_generated.connect(self.append_log)
@@ -899,7 +924,7 @@ class SimulationWindow(QWidget):
         self.btn_stop.setEnabled(True)
         self.btn_export.setEnabled(False)
         self.set_ui_locked(True)
-        self.duration_spin.setEnabled(True) # Allow duration edit during run
+        self.duration_input.setEnabled(True) # Allow duration edit during run
         self.btn_add_time.setEnabled(True)
         self.data_ready_flag = False
 
@@ -935,7 +960,7 @@ class SimulationWindow(QWidget):
         self.btn_stop.setEnabled(False)
         self.btn_export.setEnabled(self.data_ready_flag)
         self.set_ui_locked(False)
-        self.duration_spin.setEnabled(True)
+        self.duration_input.setEnabled(True)
         self.btn_add_time.setEnabled(True)
 
     def on_speed_change(self, val):

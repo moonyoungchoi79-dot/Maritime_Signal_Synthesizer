@@ -1,8 +1,11 @@
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QSpinBox, QDoubleSpinBox
 )
+from PyQt6.QtCore import pyqtSignal
 
 class TimeInputWidget(QWidget):
+    valueChanged = pyqtSignal(float)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QHBoxLayout(self)
@@ -14,10 +17,18 @@ class TimeInputWidget(QWidget):
         self.spin_m = QSpinBox(); self.spin_m.setRange(0, 59); self.spin_m.setSuffix("m")
         self.spin_s = QDoubleSpinBox(); self.spin_s.setRange(0, 59.99); self.spin_s.setSuffix("s")
         
+        self.spin_d.valueChanged.connect(self.emit_value)
+        self.spin_h.valueChanged.connect(self.emit_value)
+        self.spin_m.valueChanged.connect(self.emit_value)
+        self.spin_s.valueChanged.connect(self.emit_value)
+        
         layout.addWidget(self.spin_d)
         layout.addWidget(self.spin_h)
         layout.addWidget(self.spin_m)
         layout.addWidget(self.spin_s)
+        
+    def emit_value(self):
+        self.valueChanged.emit(self.get_seconds())
         
     def set_seconds(self, total_seconds):
         d = int(total_seconds // 86400)

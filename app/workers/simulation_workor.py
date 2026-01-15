@@ -7,7 +7,7 @@ import time
 import numpy as np
 import tempfile
 
-from PyQt6.QtCore import QObject, pyqtSignal, Qt, QPointF
+from PyQt6.QtCore import QObject, pyqtSignal, Qt, QPointF, QCoreApplication
 from PyQt6.QtGui import QPolygonF
 
 from app.core.models.project import current_project
@@ -89,6 +89,8 @@ class SimulationWorker(QObject):
             while m <= self.max_steps:
                 if not self.running: break
                 self.m = m
+                
+                QCoreApplication.processEvents()
                 
                 if self.paused:
                       time.sleep(0.1)
@@ -238,6 +240,65 @@ class SimulationWorker(QObject):
 
     def update_duration(self, new_duration):
         self.max_steps = math.ceil(new_duration / self.proj.unit_time)
+
+    def set_ship_speed(self, ship_idx, speed_kn):
+        ship = self.proj.get_ship_by_idx(ship_idx)
+        if not ship: return
+
+        # Initialize dynamic state if not already
+        if ship_idx not in self.dynamic_ships:
+            # Get current state from static path
+            state = self.get_state_at_step(ship, self.m)
+            
+            # Calculate current path index for continuity
+            idx = 0
+            times = self.cached_times.get(ship.idx)
+            if times is not None:
+                 idx = np.searchsorted(times, self.current_time, side='right') - 1
+                 if idx < 0: idx = 0
+
+            self.dynamic_ships[ship_idx] = {
+                'lat': state['lat_deg'],
+                'lon': state['lon_deg'],
+                'spd': state['sog_knots'],
+                'hdg': state['heading_true_deg'],
+                'last_update_time': self.current_time,
+                'path_idx': idx,
+                'following_path': True 
+            }
+        
+        self.dynamic_ships[ship_idx]['spd'] = speed_kn
+        self.log_message.emit(f"[Manual] Speed changed for {ship.name} to {speed_kn} kn")
+
+    def set_ship_heading(self, ship_idx, heading_deg):
+        ship = self.proj.get_ship_by_idx(ship_idx)
+        if not ship: return
+
+        # Initialize dynamic state if not already
+        if ship_idx not in self.dynamic_ships:
+            # Get current state from static path
+            state = self.get_state_at_step(ship, self.m)
+            
+            # Calculate current path index for continuity
+            idx = 0
+            times = self.cached_times.get(ship.idx)
+            if times is not None:
+                 idx = np.searchsorted(times, self.current_time, side='right') - 1
+                 if idx < 0: idx = 0
+
+            self.dynamic_ships[ship_idx] = {
+                'lat': state['lat_deg'],
+                'lon': state['lon_deg'],
+                'spd': state['sog_knots'],
+                'hdg': state['heading_true_deg'],
+                'last_update_time': self.current_time,
+                'path_idx': idx,
+                'following_path': True 
+            }
+        
+        self.dynamic_ships[ship_idx]['hdg'] = heading_deg
+        self.dynamic_ships[ship_idx]['following_path'] = False
+        self.log_message.emit(f"[Manual] Heading changed for {ship.name} to {heading_deg} deg")
 
     def check_events(self, t_current):
         for evt in self.events:
@@ -459,10 +520,12 @@ class SimulationWorker(QObject):
                 
                 current_idx = dyn.get('path_idx', 0)
                 if current_idx >= len(ship.resampled_points) - 1:
-                     current_idx = len(ship.resampled_points) - 2
+                     # Already at end, switch to vector movement
+                     dyn['following_path'] = False
                 
-                while dist_remain_m > 0:
+                while dist_remain_m > 0 and dyn.get('following_path'):
                     if current_idx >= len(ship.resampled_points) - 1:
+                        dyn['following_path'] = False
                         break
                     
                     p_next = ship.resampled_points[current_idx + 1]
@@ -501,6 +564,26 @@ class SimulationWorker(QObject):
                         current_idx += 1
                         dyn['path_idx'] = current_idx
                 
+                # If we switched to vector mode (end of path) and still have distance
+                if not dyn.get('following_path') and dist_remain_m > 0:
+                     dist_nm = dist_remain_m / 1852.0
+                     dist_deg = dist_nm / 60.0
+                     
+                     d_lat = dist_deg * math.cos(math.radians(dyn['hdg']))
+                     mid_lat = dyn['lat'] + d_lat/2
+                     cos_mid = math.cos(math.radians(mid_lat))
+                     if abs(cos_mid) < 0.01: cos_mid = 0.01
+                     d_lon = dist_deg * math.sin(math.radians(dyn['hdg'])) / cos_mid
+                     
+                     dyn['lat'] += d_lat
+                     dyn['lon'] += d_lon
+                     
+                     # Clamp
+                     if dyn['lat'] > 90: dyn['lat'] = 90; dyn['spd'] = 0
+                     elif dyn['lat'] < -90: dyn['lat'] = -90; dyn['spd'] = 0
+                     
+                     dyn['lon'] = normalize_lon(dyn['lon'])
+                
                 dyn['last_update_time'] = t_current
 
             elif dt > 0:
@@ -519,6 +602,8 @@ class SimulationWorker(QObject):
                 
                 dyn['lat'] += d_lat
                 dyn['lon'] += d_lon
+                if dyn['lat'] > 90: dyn['lat'] = 90; dyn['spd'] = 0
+                elif dyn['lat'] < -90: dyn['lat'] = -90; dyn['spd'] = 0
                 dyn['last_update_time'] = t_current
                 
                 # Clamp lat
@@ -554,6 +639,58 @@ class SimulationWorker(QObject):
              times = np.array(ship.cumulative_time)
              self.cached_times[ship.idx] = times
              
+        # Infinite Movement Logic: Extrapolate if t_current > times[-1]
+        if t_current > times[-1]:
+            idx = len(times) - 1
+            p_last = ship.resampled_points[idx]
+            _, _, lat_last, lon_last = pixel_to_coords(p_last[0], p_last[1], mi)
+            
+            # Calculate Heading from last segment
+            if idx > 0:
+                p_prev = ship.resampled_points[idx-1]
+                _, _, lat_prev, lon_prev = pixel_to_coords(p_prev[0], p_prev[1], mi)
+                d_lat = lat_last - lat_prev
+                mid_lat = (lat_prev + lat_last) / 2.0
+                d_lon = (lon_last - lon_prev) * math.cos(math.radians(mid_lat))
+                if abs(d_lat) > 1e-9 or abs(d_lon) > 1e-9:
+                    hdg = math.degrees(math.atan2(d_lon, d_lat))
+                    hdg = (hdg + 360) % 360
+                else:
+                    hdg = 0.0
+            else:
+                hdg = 0.0
+            
+            sog = ship.node_velocities_kn[idx]
+            
+            dt = t_current - times[-1]
+            dist_nm = sog * (dt / 3600.0)
+            dist_deg = dist_nm / 60.0
+            
+            d_lat_new = dist_deg * math.cos(math.radians(hdg))
+            new_lat = lat_last + d_lat_new
+            
+            if new_lat > 90: new_lat = 90; sog = 0
+            elif new_lat < -90: new_lat = -90; sog = 0
+            
+            cos_lat = math.cos(math.radians(new_lat))
+            if abs(cos_lat) < 0.01: cos_lat = 0.01
+            d_lon_new = dist_deg * math.sin(math.radians(hdg)) / cos_lat
+            new_lon = normalize_lon(lon_last + d_lon_new)
+            
+            sog_kmh = sog * 1.852
+            sog_mps = sog * 0.51444444
+            
+            return {
+                "lat_deg": new_lat,
+                "lon_deg": new_lon,
+                "sog_knots": sog,
+                "sog_kmh": sog_kmh,
+                "sog_mps": sog_mps,
+                "cog_true_deg": hdg,
+                "heading_true_deg": hdg,
+                "elapsed_sec": t_current
+            }
+
         # Clamp t_current for interpolation to the actual path duration
         # This ensures that if simulation runs longer than path, ship stays at last point
         t_interp = min(t_current, times[-1])
@@ -587,9 +724,6 @@ class SimulationWorker(QObject):
         v1 = ship.node_velocities_kn[idx]
         v2 = ship.node_velocities_kn[idx+1]
         sog = v1 + (v2 - v1) * alpha
-        
-        if t_current < t_start or t_current > times[-1]:
-            sog = 0.0
         
         sog_kmh = sog * 1.852
         sog_mps = sog * 0.51444444
