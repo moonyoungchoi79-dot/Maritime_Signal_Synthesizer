@@ -735,7 +735,7 @@ class SimulationPanel(QWidget):
                 
                 st = self.calculate_ship_state(s, t_restore)
                 px, py = coords_to_pixel(st['lat'], st['lon'], mi)
-                pos_dict[s.idx] = (px, py, st['hdg'])
+                pos_dict[s.idx] = (px, py, st['hdg'], st['spd'])
             self.update_positions(pos_dict)
         
         # Update Main Window (Combo box and Map)
@@ -1312,7 +1312,9 @@ class SimulationPanel(QWidget):
                  
                  # FIX: Use last known dynamic position if available to prevent visual jumping
                  if s.idx in self.last_pos_dict:
-                     px, py, heading = self.last_pos_dict[s.idx]
+                     data = self.last_pos_dict[s.idx]
+                     px, py = data[0], data[1]
+                     heading = data[2]
                  else:
                      st = self.calculate_ship_state(s, t_now)
                      px, py = coords_to_pixel(st['lat'], st['lon'], mi)

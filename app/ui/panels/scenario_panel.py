@@ -723,6 +723,7 @@ class ScenarioPanel(QWidget):
             row = target_row
         
         evt = app_state.current_scenario.events[row]
+        old_id = evt.id # Capture old ID
         evt.name = self.edit_evt_name.text()
         evt.enabled = self.chk_evt_enabled.isChecked()
         evt.trigger_type = self.combo_trigger.currentText()
@@ -746,15 +747,20 @@ class ScenarioPanel(QWidget):
         evt.reference_ship_idx = self.combo_ref.currentData()
         evt.action_value = self.spin_action_val.value()
         
+        # Regenerate ID to force re-evaluation in SimulationWorker
+        new_id = str(uuid.uuid4())
+        evt.id = new_id
+        
         self.list_scen_events.blockSignals(True)
         item = self.list_scen_events.item(row)
         if item:
             item.setText(evt.name)
             item.setCheckState(Qt.CheckState.Checked if evt.enabled else Qt.CheckState.Unchecked)
+            item.setData(Qt.ItemDataRole.UserRole, new_id)
         self.list_scen_events.blockSignals(False)
         
         # Sync with Project Events (Single Source of Truth)
-        proj_evt = next((e for e in current_project.events if e.id == evt.id), None)
+        proj_evt = next((e for e in current_project.events if e.id == old_id), None)
         if proj_evt:
             proj_evt.name = evt.name
             proj_evt.enabled = evt.enabled
@@ -767,6 +773,7 @@ class ScenarioPanel(QWidget):
             proj_evt.is_relative_to_end = evt.is_relative_to_end
             if hasattr(evt, 'action_option'):
                 proj_evt.action_option = evt.action_option
+            proj_evt.id = new_id # Update Project Event ID to maintain sync
 
         self.is_dirty = False
         self.editor_group.setTitle("Selected Event Details")
