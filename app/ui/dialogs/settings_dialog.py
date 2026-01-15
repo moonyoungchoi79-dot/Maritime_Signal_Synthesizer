@@ -192,6 +192,15 @@ class SettingsDialog(QDialog):
         label_rt_speed_var.setToolTip("Variance value (knots^2) for Random Target speed distribution.")
         rtg_layout.addRow(label_rt_speed_var, self.spin_rt_speed_var)
         
+        self.spin_sim_speed_var = QDoubleSpinBox()
+        self.spin_sim_speed_var.setRange(0.0, 100.0)
+        self.spin_sim_speed_var.setSingleStep(0.1)
+        self.spin_sim_speed_var.setValue(getattr(current_project.settings, "simulation_speed_variance", 0.1))
+        
+        label_sim_var = QLabel("Simulation Speed Noise Variance:")
+        label_sim_var.setToolTip("Variance for dynamic speed noise applied to all ships during simulation.")
+        rtg_layout.addRow(label_sim_var, self.spin_sim_speed_var)
+
         l.addWidget(random_target_group)
         # --- End New ---
 
@@ -448,6 +457,7 @@ class SettingsDialog(QDialog):
         current_project.settings.theme_mode = self.combo_theme.currentText()
         current_project.settings.own_ship_idx = self.spin_own.value()
         current_project.settings.random_target_speed_variance = self.spin_rt_speed_var.value()
+        current_project.settings.simulation_speed_variance = self.spin_sim_speed_var.value()
         current_project.settings.path_thickness = self.spin_path_th.value()
         current_project.settings.traveled_path_thickness = self.spin_travel_th.value()
         for k, s in self.drop_spins.items():

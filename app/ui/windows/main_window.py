@@ -439,6 +439,7 @@ class MainWindow(QMainWindow):
         
         self.tabs.addTab(self.map_editor_widget, "Path")
         self.tabs.addTab(self.speed_pop, "Speed")
+        self.tabs.setTabVisible(1, False) # Hide Speed Tab
         self.tabs.addTab(self.event_panel, "Event")
         self.tabs.addTab(self.scenario_panel, "Scenario")
         
@@ -543,7 +544,7 @@ class MainWindow(QMainWindow):
     def show_ship_table(self, idx):
         ship = current_project.get_ship_by_idx(idx)
         if not ship: return
-        dur_str = self.format_duration(ship.total_duration_sec) if ship.is_generated else "-"
+        dur_str = "-" # Duration is dynamic now
         self.lbl_dur.setText(f"Duration: {dur_str}")
         
         self.data_table.blockSignals(True)
@@ -929,7 +930,7 @@ class MainWindow(QMainWindow):
         self.data_changed.emit()
 
     def invalidate_simulation_data(self, ship):
-        ship.is_generated = False
+        # ship.is_generated = False # No longer used in the same way
         ship.time_series = [] 
         ship.packed_data = None 
         ship.cumulative_time = []
@@ -945,22 +946,18 @@ class MainWindow(QMainWindow):
     def check_sim_ready(self):
         ready = True
         if not current_project.ships: ready = False
+        # Logic changed: Ready if ships exist and have points. No pre-generation needed.
         for s in current_project.ships:
-            if not s.is_generated:
+            if not s.raw_points:
                 ready = False
                 break
-        # self.btn_sim.setEnabled(ready)
-        # if not ready:
-        #     self.btn_sim.setToolTip("All ships must have generated speed/duration.")
-        # else:
-        #     self.btn_sim.setToolTip("")
         
         txt = self.obj_combo.currentText()
         if "[Ship]" in txt:
             sid = self.obj_combo.currentData()
             s = current_project.get_ship_by_idx(sid)
             if s:
-                dur_str = self.format_duration(s.total_duration_sec) if s.is_generated else "-"
+                dur_str = "-" # Dynamic duration
                 self.lbl_dur.setText(f"Duration: {dur_str}")
 
     def delete_points(self, s_idx, p_idx):
@@ -1154,7 +1151,6 @@ class MainWindow(QMainWindow):
                 ship.raw_points = pts
                 ship.raw_speeds = spds
                 
-                ship.is_generated = False
                 ship.total_duration_sec = 0.0
                 ship.time_series = [] 
                 ship.packed_data = None 
@@ -1382,6 +1378,7 @@ class MainWindow(QMainWindow):
                 "mask_color": p.settings.mask_color,
                 "dropout_probs": p.settings.dropout_probs,
                 "theme_mode": p.settings.theme_mode
+                "simulation_speed_variance": getattr(p.settings, "simulation_speed_variance", 0.1)
             },
             # Minimal info in project.json, full data in subfolders/files
             "ships": ships_list, # Keeping for backward compat or easy loading

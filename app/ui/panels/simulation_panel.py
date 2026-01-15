@@ -163,7 +163,7 @@ class TargetInfoDialog(QDialog):
         elif self.parent().calculate_ship_state:
             t_now = self.worker.current_time if self.worker else 0.0
             st = self.parent().calculate_ship_state(ship, t_now)
-            current_spd = st['spd']
+            current_spd = st.get('spd', 0.0)
             
         val, ok = QInputDialog.getDouble(self, "Change Speed", "New Speed (kn):", value=current_spd, min=0, max=100, decimals=1)
         if ok:
@@ -180,7 +180,7 @@ class TargetInfoDialog(QDialog):
         elif self.parent().calculate_ship_state:
             t_now = self.worker.current_time if self.worker else 0.0
             st = self.parent().calculate_ship_state(ship, t_now)
-            current_hdg = st['hdg']
+            current_hdg = st.get('hdg', 0.0)
             
         val, ok = QInputDialog.getDouble(self, "Change Heading", "New Heading (deg):", value=current_hdg, min=0, max=360, decimals=1)
         if ok:
@@ -265,7 +265,7 @@ class SimulationPanel(QWidget):
                 QMessageBox.warning(self, "Warning", "Own Ship is not set. Cannot generate random targets.")
                 return
             
-            if not own_ship.is_generated:
+            if not own_ship.raw_points:
                 QMessageBox.warning(self, "Warning", "Own Ship speed/path data is not generated. Please generate speed data in 'Speed Generator' first.")
                 return
 
@@ -610,7 +610,6 @@ class SimulationPanel(QWidget):
             
             px_start, py_start = coords_to_pixel(start_lat, start_lon, mi)
             raw_pixels = [(px_start, py_start)]
-            times = [t_now]
             
             total_actual_dur = 0.0
             current_t = t_now
@@ -644,7 +643,6 @@ class SimulationPanel(QWidget):
                 raw_pixels.append((px, py))
                 
                 current_t += (seg_dur * ratio)
-                times.append(current_t)
 
                 curr_lat = end_lat_seg
                 curr_lon = end_lon_seg
@@ -680,9 +678,6 @@ class SimulationPanel(QWidget):
             # Optimized: Use waypoints directly instead of dense resampling.
             # The simulation worker interpolates linearly between these points.
             new_ship.resampled_points = raw_pixels
-            new_ship.cumulative_time = times
-            new_ship.node_velocities_kn = [spd] * len(times)
-            new_ship.total_duration_sec = times[-1]
             
             # Set Signals
             if s_type == "AI":
@@ -705,7 +700,7 @@ class SimulationPanel(QWidget):
         self.draw_static_map()
         
         # Fix: Restore positions to current simulation time if active
-        if self.worker:
+        if self.worker and self.worker.running:
             # Use cached dynamic positions for existing ships to prevent jumping
             pos_dict = self.last_pos_dict.copy()
             
@@ -715,7 +710,7 @@ class SimulationPanel(QWidget):
             # Only calculate for NEW ships (or if missing from cache)
             for s in current_project.ships:
                 if not s.is_generated: continue
-                if s.idx in pos_dict: continue # Skip if we have dynamic pos
+                if s.idx in pos_dict and s.idx in self.worker.dynamic_ships: continue # Skip if we have dynamic pos
                 
                 st = self.calculate_ship_state(s, t_restore)
                 px, py = coords_to_pixel(st['lat'], st['lon'], mi)
@@ -1309,7 +1304,7 @@ class SimulationPanel(QWidget):
         self.draw_static_map()
 
         active_ships = [s for s in current_project.ships if s.is_generated]
-        if not active_ships:
+        if not current_project.ships: # Check if any ships exist
             QMessageBox.warning(self, "Info", "No ships generated.")
             return
             
@@ -1717,80 +1712,30 @@ class SimulationPanel(QWidget):
         self.stop_all_blinks()
 
     def calculate_ship_state(self, ship, t_current):
-        if not ship.cumulative_time:
-            return {'lat':0, 'lon':0, 'spd':0, 'hdg':0}
-            
+        # If worker is running, return dynamic state
+        if self.worker and self.worker.running and ship.idx in self.worker.dynamic_ships:
+            dyn = self.worker.dynamic_ships[ship.idx]
+            return {'lat': dyn['lat'], 'lon': dyn['lon'], 'spd': dyn['spd'], 'hdg': dyn['hdg']}
+
+        # If not running, return start position
         mi = current_project.map_info
-        times = np.array(ship.cumulative_time)
-        
-        # Infinite Movement Logic for Static Calculation
-        if t_current >= times[-1]:
-            idx = len(times) - 1
-            p_last = ship.resampled_points[idx]
-            _, _, lat_last, lon_last = pixel_to_coords(p_last[0], p_last[1], mi)
+        if ship.resampled_points:
+            px, py = ship.resampled_points[0]
+            _, _, lat, lon = pixel_to_coords(px, py, mi)
             
-            # Heading
-            if idx > 0:
-                p_prev = ship.resampled_points[idx-1]
-                _, _, lat_prev, lon_prev = pixel_to_coords(p_prev[0], p_prev[1], mi)
-                d_lat = lat_last - lat_prev
-                mid_lat = (lat_prev + lat_last) / 2.0
-                d_lon = (lon_last - lon_prev) * math.cos(math.radians(mid_lat))
+            # Initial heading
+            hdg = 0.0
+            if len(ship.resampled_points) > 1:
+                px2, py2 = ship.resampled_points[1]
+                _, _, lat2, lon2 = pixel_to_coords(px2, py2, mi)
+                d_lat = lat2 - lat
+                d_lon = (lon2 - lon) * math.cos(math.radians((lat+lat2)/2))
                 hdg = math.degrees(math.atan2(d_lon, d_lat))
                 hdg = (hdg + 360) % 360
-            else:
-                hdg = 0.0
             
-            spd = ship.node_velocities_kn[idx]
+            return {'lat': lat, 'lon': lon, 'spd': ship.raw_speeds.get(0, 0.0), 'hdg': hdg}
             
-            dt = t_current - times[-1]
-            dist_nm = spd * (dt / 3600.0)
-            dist_deg = dist_nm / 60.0
-            
-            d_lat_new = dist_deg * math.cos(math.radians(hdg))
-            lat = lat_last + d_lat_new
-            if lat > 90: lat = 90; spd = 0
-            elif lat < -90: lat = -90; spd = 0
-            
-            d_lon_new = dist_deg * math.sin(math.radians(hdg)) / math.cos(math.radians(lat))
-            lon = normalize_lon(lon_last + d_lon_new)
-            
-            return {'lat': lat, 'lon': lon, 'spd': spd, 'hdg': hdg}
-            
-        elif t_current <= times[0]:
-            idx = 0
-            alpha = 0.0
-        else:
-            idx = np.searchsorted(times, t_current, side='right') - 1
-            t1 = times[idx]
-            t2 = times[idx+1]
-            alpha = (t_current - t1) / (t2 - t1) if t2 > t1 else 0.0
-            
-        p1 = ship.resampled_points[idx]
-        p2 = ship.resampled_points[idx+1]
-        
-        px = p1[0] + (p2[0] - p1[0]) * alpha
-        py = p1[1] + (p2[1] - p1[1]) * alpha
-        
-        _, _, lat, lon = pixel_to_coords(px, py, mi)
-        
-        v1 = ship.node_velocities_kn[idx]
-        v2 = ship.node_velocities_kn[idx+1]
-        
-        if alpha >= 1.0:
-            spd = v1 # Keep last speed instead of interpolating to v2 (which might be 0)
-        else:
-            spd = v1 + (v2 - v1) * alpha
-        
-        # Calculate Heading
-        _, _, lat1, lon1 = pixel_to_coords(p1[0], p1[1], mi)
-        _, _, lat2, lon2 = pixel_to_coords(p2[0], p2[1], mi)
-        d_lat = lat2 - lat1
-        d_lon = (lon2 - lon1) * math.cos(math.radians((lat1+lat2)/2))
-        hdg = math.degrees(math.atan2(d_lon, d_lat))
-        hdg = (hdg + 360) % 360
-        
-        return {'lat': lat, 'lon': normalize_lon(lon), 'spd': spd, 'hdg': hdg}
+        return {'lat':0, 'lon':0, 'spd':0, 'hdg':0}
 
     def show_target_info(self, idx):
         ship = current_project.get_ship_by_idx(idx)
