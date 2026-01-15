@@ -34,3 +34,30 @@ class ShipData:
     packed_data: Optional[np.ndarray] = None 
     
     is_generated: bool = False
+
+    def get_display_segments(self) -> List[List[Tuple[float, float]]]:
+        """
+        날짜변경선(180도) 통과 시 지도가 가로질러 그려지는 현상을 방지하기 위해
+        경로를 분할하여 반환합니다.
+        """
+        points = self.resampled_points if self.resampled_points else self.raw_points
+        if not points:
+            return []
+
+        segments = []
+        current_segment = [points[0]]
+
+        for i in range(1, len(points)):
+            prev_lat, prev_lon = points[i-1]
+            curr_lat, curr_lon = points[i]
+
+            if abs(curr_lon - prev_lon) > 180.0:
+                segments.append(current_segment)
+                current_segment = []
+            
+            current_segment.append((curr_lat, curr_lon))
+        
+        if current_segment:
+            segments.append(current_segment)
+            
+        return segments

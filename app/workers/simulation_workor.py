@@ -322,12 +322,22 @@ class SimulationWorker(QObject):
         if sid not in self.dynamic_ships:
             # Get current state from static path
             state = self.get_state_at_step(ship, self.m)
+            
+            # Calculate current path index for continuity
+            idx = 0
+            times = self.cached_times.get(ship.idx)
+            if times is not None:
+                 idx = np.searchsorted(times, t_current, side='right') - 1
+                 if idx < 0: idx = 0
+
             self.dynamic_ships[sid] = {
                 'lat': state['lat_deg'],
                 'lon': state['lon_deg'],
                 'spd': state['sog_knots'],
                 'hdg': state['heading_true_deg'],
-                'last_update_time': t_current
+                'last_update_time': t_current,
+                'path_idx': idx,
+                'following_path': True # Default to following path
             }
             
         dyn = self.dynamic_ships[sid]
@@ -336,8 +346,13 @@ class SimulationWorker(QObject):
             dyn['spd'] = 0.0
         elif evt.action_type == "CHANGE_SPEED":
             dyn['spd'] = evt.action_value
+            # Re-enable path following if we weren't manually steering
+            if not dyn.get('manual_heading', False):
+                dyn['following_path'] = True
         elif evt.action_type == "CHANGE_HEADING":
             dyn['hdg'] = evt.action_value
+            dyn['manual_heading'] = True
+            dyn['following_path'] = False
         elif evt.action_type == "MANEUVER":
             opt = getattr(evt, 'action_option', "")
             if opt == "ReturnToOriginalPath_ShortestDistance":
@@ -361,6 +376,7 @@ class SimulationWorker(QObject):
 
     def get_state_at_step(self, ship, m):
         t_current = m * self.proj.unit_time
+        mi = self.proj.map_info
         
         # Check if ship is in dynamic mode (overridden by event)
         if ship.idx in self.dynamic_ships:
@@ -368,7 +384,6 @@ class SimulationWorker(QObject):
             dt = t_current - dyn['last_update_time']
             
             # --- Guidance Logic for Maneuvers ---
-            mi = self.proj.map_info
             if dyn.get('mode') == 'RETURN_TO_PATH':
                 c_lat, c_lon = dyn['lat'], dyn['lon']
                 c_px, c_py = coords_to_pixel(c_lat, c_lon, mi)
@@ -437,7 +452,58 @@ class SimulationWorker(QObject):
                 elif best_idx == len(ship.resampled_points)-1:
                     dyn['spd'] = 0.0
 
-            if dt > 0:
+            # --- Movement Logic ---
+            if dyn.get('following_path') and ship.resampled_points:
+                # Move along the pre-defined path at the new speed
+                dist_remain_m = dyn['spd'] * (dt / 3600.0) * 1852.0
+                
+                current_idx = dyn.get('path_idx', 0)
+                if current_idx >= len(ship.resampled_points) - 1:
+                     current_idx = len(ship.resampled_points) - 2
+                
+                while dist_remain_m > 0:
+                    if current_idx >= len(ship.resampled_points) - 1:
+                        break
+                    
+                    p_next = ship.resampled_points[current_idx + 1]
+                    _, _, lat_next, lon_next = pixel_to_coords(p_next[0], p_next[1], mi)
+                    
+                    d_seg = haversine_distance(dyn['lat'], dyn['lon'], lat_next, lon_next)
+                    
+                    if d_seg > dist_remain_m:
+                        # Move intermediate
+                        frac = dist_remain_m / d_seg
+                        dyn['lat'] += (lat_next - dyn['lat']) * frac
+                        
+                        d_lon = lon_next - dyn['lon']
+                        if d_lon > 180: d_lon -= 360
+                        elif d_lon < -180: d_lon += 360
+                        
+                        dyn['lon'] = normalize_lon(dyn['lon'] + d_lon * frac)
+                        
+                        # Update heading to face next point
+                        d_lat_d = lat_next - dyn['lat']
+                        mid_lat = (dyn['lat'] + lat_next) / 2.0
+                        d_lon_d = (lon_next - dyn['lon'])
+                        if d_lon_d > 180: d_lon_d -= 360
+                        elif d_lon_d < -180: d_lon_d += 360
+                        d_lon_d = d_lon_d * math.cos(math.radians(mid_lat))
+                        
+                        if abs(d_lat_d) > 1e-9 or abs(d_lon_d) > 1e-9:
+                            dyn['hdg'] = (math.degrees(math.atan2(d_lon_d, d_lat_d)) + 360) % 360
+                        
+                        dist_remain_m = 0
+                    else:
+                        # Reached waypoint
+                        dyn['lat'] = lat_next
+                        dyn['lon'] = lon_next
+                        dist_remain_m -= d_seg
+                        current_idx += 1
+                        dyn['path_idx'] = current_idx
+                
+                dyn['last_update_time'] = t_current
+
+            elif dt > 0:
                 # Update position based on current speed/heading
                 # 1 knot = 1 nm/h = 1.852 km/h = 0.5144 m/s
                 # approx 1 nm = 1/60 deg lat
@@ -506,14 +572,17 @@ class SimulationWorker(QObject):
         else:
             alpha = 0.0
             
-        mi = self.proj.map_info
         p1 = ship.resampled_points[idx]
         p2 = ship.resampled_points[idx+1]
         
-        cur_px = p1[0] + (p2[0] - p1[0]) * alpha
-        cur_py = p1[1] + (p2[1] - p1[1]) * alpha
+        _, _, lat1, lon1 = pixel_to_coords(p1[0], p1[1], mi)
+        _, _, lat2, lon2 = pixel_to_coords(p2[0], p2[1], mi)
         
-        _, _, lat, lon = pixel_to_coords(cur_px, cur_py, mi)
+        lat = lat1 + (lat2 - lat1) * alpha
+        d_lon = lon2 - lon1
+        if d_lon > 180: d_lon -= 360
+        elif d_lon < -180: d_lon += 360
+        lon = normalize_lon(lon1 + d_lon * alpha)
         
         v1 = ship.node_velocities_kn[idx]
         v2 = ship.node_velocities_kn[idx+1]
@@ -524,9 +593,6 @@ class SimulationWorker(QObject):
         
         sog_kmh = sog * 1.852
         sog_mps = sog * 0.51444444
-        
-        _, _, lat1, lon1 = pixel_to_coords(p1[0], p1[1], mi)
-        _, _, lat2, lon2 = pixel_to_coords(p2[0], p2[1], mi)
         
         dy = lat2 - lat1
         dx = (lon2 - lon1) * math.cos(math.radians((lat1+lat2)/2))
