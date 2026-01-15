@@ -25,6 +25,7 @@ class ProjectSettings:
     theme_mode: str = "System" # "System", "Light", "Dark"
     
     speed_variance: float = 1.0
+    simulation_speed_variance: float = 0.1
     
     own_ship_idx: int = 0
     include_gp_signal: bool = False 

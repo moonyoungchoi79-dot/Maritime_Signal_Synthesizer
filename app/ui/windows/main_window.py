@@ -44,11 +44,9 @@ from app.ui.map.map_view import MapView
 from app.ui.dialogs.new_project_dialog import NewProjectDialog
 from app.ui.dialogs.settings_dialog import SettingsDialog
 from app.ui.dialogs.help_dialog import HelpDialog
-from app.ui.panels.speed_panel import SpeedGeneratorPanel
 from app.ui.panels.simulation_panel import SimulationPanel
 from app.ui.panels.event_panel import EventScriptPanel
 from app.ui.panels.scenario_panel import ScenarioPanel
-from app.workers.speed_generator_worker import SpeedGeneratorWorker
 import app.core.state as app_state
 
 class ColoredTabBar(QTabBar):
@@ -118,22 +116,16 @@ class MainWindow(QMainWindow):
         self.update_stylesheets()
         
         self.sim_panel = SimulationPanel(self)
-        self.speed_pop = SpeedGeneratorPanel(self)
         self.event_panel = EventScriptPanel(self)
         self.scenario_panel = ScenarioPanel(self)
         self.scenario_panel.data_changed.connect(self.on_data_changed)
         
-        self.speed_pop.request_generate.connect(self.generate_speed_logic)
-        
         self.init_ui()
-        self.setup_workers()
         self.update_ui_state(False)
         self.update_info_strip()
         
         self.data_changed.connect(self.on_data_changed)
         
-        self.speed_gen_total = 0
-        self.speed_gen_count = 0
         # Initialize tab state
         self.update_sim_tab_state("STOP")
 
@@ -318,8 +310,6 @@ class MainWindow(QMainWindow):
         top_tb.addSeparator()
 
         top_tb.addWidget(QLabel(" Tools: "))
-        # self.act_speed = QAction("Speed Panel", self)
-        # self.act_speed.triggered.connect(self.speed_pop.show)
         
         top_tb.addAction("User Guide", self.open_user_guide)
         top_tb.addAction("Settings", self.open_settings)
@@ -422,31 +412,17 @@ class MainWindow(QMainWindow):
         h.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         right_v.addWidget(self.data_table)
         
-        # self.btn_spd = QPushButton("Open Speed Panel")
-        # self.btn_spd.setObjectName("spdBtn")
-        # self.btn_spd.clicked.connect(self.speed_pop.show)
-        # self.btn_spd.setEnabled(False) 
-        
-        # self.btn_sim = QPushButton("Open Simulation Panel")
-        # self.btn_sim.setObjectName("simBtn")
-        # self.btn_sim.clicked.connect(self.open_sim_panel)
-        # self.btn_sim.setEnabled(False) 
-        
-        # right_v.addWidget(self.btn_spd)
-        # right_v.addWidget(self.btn_sim)
         
         main_h.addWidget(right_widget, 1)
         
         self.tabs.addTab(self.map_editor_widget, "Path")
-        self.tabs.addTab(self.speed_pop, "Speed")
-        self.tabs.setTabVisible(1, False) # Hide Speed Tab
         self.tabs.addTab(self.event_panel, "Event")
         self.tabs.addTab(self.scenario_panel, "Scenario")
         
         # Spacer
         self.spacer_widget = QWidget()
-        self.tabs.addTab(self.spacer_widget, "")
-        self.tabs.setTabEnabled(4, False)
+        self.tabs.addTab(self.spacer_widget, "") 
+        self.tabs.setTabEnabled(3, False)
         
         self.tabs.addTab(self.sim_panel, "Simulation")
         
@@ -462,12 +438,6 @@ class MainWindow(QMainWindow):
         self.view.coord_changed.connect(self.update_status)
         self.update_stylesheets()
 
-    def setup_workers(self):
-        self.speed_thread = QThread()
-        self.speed_worker = SpeedGeneratorWorker()
-        self.speed_worker.moveToThread(self.speed_thread)
-        self.speed_thread.started.connect(self.speed_worker.run)
-        self.speed_worker.finished.connect(self.on_speed_finished)
         
     def set_map_mode(self, mode):
         self.view.mode = mode
@@ -532,7 +502,6 @@ class MainWindow(QMainWindow):
             sid = self.obj_combo.currentData()
             # self.btn_spd.setEnabled(True)
             self.show_ship_table(sid)
-            self.speed_pop.set_ship(sid)
         elif "[Area]" in txt:
             sid = self.obj_combo.currentData()
             # self.btn_spd.setEnabled(False) 
@@ -746,7 +715,7 @@ class MainWindow(QMainWindow):
                     txt = QGraphicsTextItem(f"{spd:.1f} kn")
                     txt.setDefaultTextColor(Qt.GlobalColor.black)
                     txt.setFont(QFont("Arial", 8))
-                    txt.setPos(px + 10, py - 10)
+                    txt.setPos(px + 10, py + 10)
                     txt.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
                     txt.setZValue(3)
                     self.scene.addItem(txt)
@@ -939,9 +908,6 @@ class MainWindow(QMainWindow):
         
         if self.sim_panel and self.sim_panel.worker and self.sim_panel.worker.running:
             self.sim_panel.reset_state()
-            
-        if self.speed_pop.isVisible() and self.speed_pop.ship_idx == ship.idx:
-            self.speed_pop.reset_state()
 
     def check_sim_ready(self):
         ready = True
@@ -1152,7 +1118,6 @@ class MainWindow(QMainWindow):
                 ship.raw_speeds = spds
                 
                 ship.total_duration_sec = 0.0
-                ship.time_series = [] 
                 ship.packed_data = None 
                 
                 if len(ship.raw_points) < 2:
@@ -1473,9 +1438,6 @@ class MainWindow(QMainWindow):
         if w == self.map_editor_widget:
             self.redraw_map()
             sel_color = input_bg
-        elif w == self.speed_pop:
-            if self.speed_pop.ship_idx is not None:
-                self.speed_pop.refresh_graph()
         elif w == self.sim_panel:
             self.sim_panel.draw_static_map()
             self.sim_panel.refresh_tables()
@@ -1542,31 +1504,6 @@ class MainWindow(QMainWindow):
         dlg = HelpDialog(self)
         dlg.exec()
 
-    def generate_speed_logic(self):
-        if self.speed_thread.isRunning():
-            QMessageBox.warning(self, "Busy", "Speed generation is already in progress.")
-            return
-        indices = self.speed_pop.get_selected_ships()
-        if not indices: return
-        
-        self.speed_gen_total = len(indices)
-        self.speed_gen_count = 0
-        
-        self.speed_worker.target_ship_indices = indices
-        self.speed_worker.variance = current_project.settings.speed_variance
-        self.speed_thread.start()
-
-    def on_speed_finished(self, idx):
-        self.speed_gen_count += 1
-        self.speed_pop.set_ship(idx) 
-        self.speed_pop.refresh_table()
-        
-        if self.speed_gen_count >= self.speed_gen_total:
-            self.speed_thread.quit()
-            self.speed_thread.wait()
-            self.redraw_map()
-            self.check_sim_ready()
-            QMessageBox.information(self, "Done", "Speed & Duration Calculated (WGS84).")
 
     # def open_sim_panel(self):
     #     if not self.sim_win:
@@ -1577,7 +1514,6 @@ class MainWindow(QMainWindow):
         if self.sim_panel and self.sim_panel.isVisible():
             self.sim_panel.draw_static_map()
             self.sim_panel.refresh_tables()
-        self.speed_pop.refresh_table()
         self.event_panel.refresh_all()
         self.scenario_panel.refresh_ui()
 

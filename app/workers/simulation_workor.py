@@ -59,7 +59,7 @@ class SimulationWorker(QObject):
             random.seed(seed_val)
             np.random.seed(seed_val)
             
-            self.active_ships = [s for s in self.proj.ships if s.raw_points]
+            self.active_ships = [s for s in self.proj.ships if s.raw_points] # All ships with paths
             if not self.active_ships:
                 self.log_message.emit("No active ships with paths.")
                 self.finished.emit()
@@ -74,13 +74,14 @@ class SimulationWorker(QObject):
                 s_seed = (self.proj.seed + s.idx) % (2**32 - 1)
                 s_rng = random.Random(s_seed)
                 
-                start_px, start_py = s.resampled_points[0]
+                # Use resampled points for geometry
+                start_px, start_py = s.resampled_points[0] if s.resampled_points else s.raw_points[0]
                 _, _, start_lat, start_lon = pixel_to_coords(start_px, start_py, mi)
                 
                 self.dynamic_ships[s.idx] = {
                     'lat': start_lat,
                     'lon': start_lon,
-                    'spd': s.raw_speeds.get(0, 0.0),
+                    'spd': s.raw_speeds.get(0, 5.0), # Base target speed
                     'hdg': 0.0,
                     'path_idx': 0,
                     'dist_from_last_point': 0.0,
@@ -219,7 +220,7 @@ class SimulationWorker(QObject):
             self.finished.emit()
             
     def refresh_active_ships(self):
-        self.active_ships = [s for s in self.proj.ships if s.raw_points]
+        self.active_ships = [s for s in self.proj.ships if s.raw_points] # Refresh list
 
     def send_nmea(self, raw, ts_obj):
 
@@ -419,7 +420,7 @@ class SimulationWorker(QObject):
              # Initialize on fly if missing (e.g. added during sim?)
              s_seed = (self.proj.seed + ship.idx) % (2**32 - 1)
              self.dynamic_ships[ship.idx] = {
-                'lat': 0, 'lon': 0, 'spd': 0, 'hdg': 0, 'path_idx': 0, 
+                'lat': 0, 'lon': 0, 'spd': 5.0, 'hdg': 0, 'path_idx': 0, 
                 'dist_from_last_point': 0.0, 'following_path': True, 'rng': random.Random(s_seed)
              }
              if ship.resampled_points:
@@ -502,23 +503,18 @@ class SimulationWorker(QObject):
             # --- Movement Logic ---
             
             # 1. Determine Target Speed
-            target_spd = dyn['spd']
-            if dyn.get('following_path'):
-                # Get speed from raw_speeds based on current path index
-                # Mapping resampled index to raw index is tricky if we don't track it.
-                # Simplified: Use the speed of the last passed waypoint.
-                # Since we use resampled points, we don't have direct mapping.
-                # But raw_speeds are keyed by raw point index.
-                # Let's assume constant speed for now or use the current 'spd' which was initialized.
-                # If we want variable speed along path, we need to interpolate raw_speeds.
-                # For now, let's use the current 'spd' in dyn state, which we can update if we hit a waypoint.
-                pass
+            # dyn['spd'] holds the current target speed (mean)
 
             # 2. Apply Noise
             variance = getattr(self.proj.settings, "simulation_speed_variance", 0.1)
             sigma = math.sqrt(variance)
             noise = dyn['rng'].gauss(0, sigma)
-            current_speed = max(0.0, dyn['spd'] + noise)
+            
+            # Only apply noise if moving
+            if dyn['spd'] > 0.01:
+                current_speed = max(0.0, dyn['spd'] + noise)
+            else:
+                current_speed = 0.0
             
             dist_step_m = current_speed * 1852.0 * (dT / 3600.0)
             
