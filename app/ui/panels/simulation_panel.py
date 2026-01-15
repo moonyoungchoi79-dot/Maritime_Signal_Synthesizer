@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QTextEdit, QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox, QTableWidget, 
     QHeaderView, QGroupBox, QMessageBox, QFileDialog, QDialog, QGraphicsScene, QListWidget,
     QGraphicsItem, QGraphicsPathItem, QGraphicsPolygonItem, QGraphicsEllipseItem, 
-    QGraphicsTextItem, QAbstractSpinBox, QMenu, QGraphicsRectItem, QFormLayout, QInputDialog,
+    QGraphicsTextItem, QAbstractSpinBox, QMenu, QGraphicsRectItem, QFormLayout, QInputDialog, QTabWidget,
     QGridLayout
 )
 from PyQt6.QtCore import (
@@ -20,6 +20,9 @@ from PyQt6.QtCore import (
 from PyQt6.QtGui import (
     QColor, QPen, QBrush, QPainterPath, QPolygonF, QFont
 )
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+import matplotlib.ticker as ticker
 
 from app.core.constants import CSV_HEADER
 from app.core.models.project import current_project, ShipData
@@ -84,7 +87,7 @@ class TargetInfoDialog(QDialog):
         state = {'lat':0, 'lon':0, 'spd':0, 'hdg':0}
         if self.worker and self.ship_idx in self.worker.dynamic_ships:
             dyn = self.worker.dynamic_ships[self.ship_idx]
-            state = {'lat': dyn['lat'], 'lon': dyn['lon'], 'spd': dyn['spd'], 'hdg': dyn['hdg']}
+            state = {'lat': dyn['lat'], 'lon': dyn['lon'], 'spd': dyn.get('sog', dyn['spd']), 'hdg': dyn['hdg']}
         elif self.parent().calculate_ship_state:
             state = self.parent().calculate_ship_state(ship, t_now)
             
@@ -236,6 +239,7 @@ class SimulationPanel(QWidget):
         self.sim_time_limit = 3600
         self.sim_ended = False
         self.last_pos_dict = {}
+        self.speed_history = {} # {ship_idx: {'t': [], 'v': []}}
         
         # UI elements for simulation time
         self._duration_spinbox = None
@@ -447,8 +451,16 @@ class SimulationPanel(QWidget):
         self.interval_table = self.create_signal_interval_table()
         interval_layout.addWidget(self.interval_table)
         right_layout.addWidget(self.interval_group)
+
+        # --- Tabs for Log and Graph ---
+        self.info_tabs = QTabWidget()
         
-        log_group = QGroupBox("Raw NMEA Output")
+        # Tab 1: Log
+        log_tab = QWidget()
+        log_tab_layout = QVBoxLayout(log_tab)
+        log_tab_layout.setContentsMargins(0,0,0,0)
+        
+        log_group = QGroupBox("Raw NMEA Output") # Keep group box for styling consistency inside tab
         log_layout = QVBoxLayout(log_group)
         
         filter_layout = QHBoxLayout()
@@ -475,7 +487,7 @@ class SimulationPanel(QWidget):
         self.log_list.customContextMenuRequested.connect(self.show_log_context_menu)
         log_layout.addWidget(self.log_list)
 
-        right_layout.addWidget(log_group, 1)
+        # Bottom buttons for log
         
         hbox_bot = QHBoxLayout()
         self.btn_export = QPushButton("Export CSV")
@@ -492,7 +504,20 @@ class SimulationPanel(QWidget):
         hbox_bot.addWidget(self.btn_save_log)
         hbox_bot.addWidget(self.btn_clear)
         log_layout.addLayout(hbox_bot)
+
+        log_tab_layout.addWidget(log_group)
         
+        # Tab 2: Graph
+        graph_tab = QWidget()
+        graph_layout = QVBoxLayout(graph_tab)
+        self.figure = Figure(figsize=(5, 3), dpi=100)
+        self.canvas = FigureCanvas(self.figure)
+        self.ax = self.figure.add_subplot(111)
+        graph_layout.addWidget(self.canvas)
+        
+        self.info_tabs.addTab(log_tab, "Log")
+        self.info_tabs.addTab(graph_tab, "Speed Graph")
+        right_layout.addWidget(self.info_tabs, 1)
         mid_layout.addWidget(right_panel, 1)
         layout.addWidget(mid_widget)
         
@@ -1406,6 +1431,7 @@ class SimulationPanel(QWidget):
         self.trail_items = {}
         self.highlighted_ship_idx = -1
         self.last_pos_dict = {}
+        self.speed_history = {}
             
         # Reset map to initial state (t=0)
         self.draw_static_map()
@@ -1463,11 +1489,10 @@ class SimulationPanel(QWidget):
             if extra <= 0: return
 
             self.sim_time_limit += extra
-            self.spin_sim_duration.blockSignals(True)
-            self.spin_sim_duration.set_seconds(self.sim_time_limit)
-            self.spin_sim_duration.blockSignals(False)
-            # Worker update is handled by on_duration_spin_changed if we didn't block, but here we update manually or let the method handle it.
-            # Actually, since we blocked signals, we should update worker manually if needed.
+            # self.spin_sim_duration.blockSignals(True)
+            # self.spin_sim_duration.set_seconds(self.sim_time_limit)
+            # self.spin_sim_duration.blockSignals(False)
+            
             if self.worker:
                 self.worker.update_duration(self.sim_time_limit)
             
@@ -1581,7 +1606,28 @@ class SimulationPanel(QWidget):
         active_idxs = {s.idx for s in current_project.ships}
         self.last_pos_dict.update(pos_dict)
 
-        for idx, (px, py, _) in pos_dict.items():
+        # Update Speed History
+        t_now = 0.0
+        if self.worker:
+            t_now = self.worker.current_time
+
+        for idx, data in pos_dict.items():
+            if len(data) > 3:
+                spd = data[3]
+                if idx not in self.speed_history:
+                    self.speed_history[idx] = {'t': [], 'v': []}
+                
+                self.speed_history[idx]['t'].append(t_now)
+                self.speed_history[idx]['v'].append(spd)
+                
+                # Keep history manageable
+                if len(self.speed_history[idx]['t']) > 1000:
+                    self.speed_history[idx]['t'].pop(0)
+                    self.speed_history[idx]['v'].pop(0)
+
+        for idx, data in pos_dict.items():
+            px, py = data[0], data[1]
+            
             if idx not in active_idxs: continue
             if idx not in self.ship_trails:
                 self.ship_trails[idx] = []
@@ -1616,9 +1662,6 @@ class SimulationPanel(QWidget):
             path_item.setZValue(5) # Below ships (10), above static paths (0)
             
         # Time Remaining Logic (Based on Simulation Duration)
-        t_now = 0.0
-        if self.worker:
-            t_now = self.worker.current_time
         
         remaining = max(0, self.sim_time_limit - t_now)
         d = int(remaining // 86400)
@@ -1633,7 +1676,10 @@ class SimulationPanel(QWidget):
         rem_parts.append(f"{s}s")
         self.eta_label.setText(" ".join(rem_parts))
 
-        for idx, (px, py, heading) in pos_dict.items():
+        for idx, data in pos_dict.items():
+            px, py = data[0], data[1]
+            heading = data[2]
+            
             ship = current_project.get_ship_by_idx(idx)
             if not ship: continue
 
@@ -1660,11 +1706,34 @@ class SimulationPanel(QWidget):
         follow_idx = self.combo_follow.currentData()
         if follow_idx is not None and follow_idx != -1:
             if follow_idx in pos_dict:
-                px, py, _ = pos_dict[follow_idx]
+                data = pos_dict[follow_idx]
+                px, py = data[0], data[1]
                 self.view.centerOn(px, py)
         
+        self.update_speed_graph()
         self.emit_simulation_status()
         self.scene.update()
+
+    def update_speed_graph(self):
+        if self.info_tabs.currentIndex() != 1: return # Only update if visible
+        
+        target_idx = self.combo_control_ship.currentData()
+        if target_idx is None: return
+        
+        self.ax.clear()
+        self.ax.grid(True)
+        self.ax.set_xlabel("Time (s)")
+        self.ax.set_ylabel("Speed (kn)")
+        
+        # Force white background for readability
+        self.figure.patch.set_facecolor('#ffffff')
+        self.ax.set_facecolor('#ffffff')
+        
+        if target_idx in self.speed_history:
+            data = self.speed_history[target_idx]
+            self.ax.plot(data['t'], data['v'], 'b-')
+            
+        self.canvas.draw()
 
     def emit_simulation_status(self):
         active_scen_names = []
@@ -1822,7 +1891,7 @@ class SimulationPanel(QWidget):
         # If worker is running, return dynamic state
         if self.worker and ship.idx in self.worker.dynamic_ships:
             dyn = self.worker.dynamic_ships[ship.idx]
-            return {'lat': dyn['lat'], 'lon': dyn['lon'], 'spd': dyn['spd'], 'hdg': dyn['hdg']}
+            return {'lat': dyn['lat'], 'lon': dyn['lon'], 'spd': dyn.get('sog', dyn['spd']), 'hdg': dyn['hdg']}
 
         # If not running, return start position
         mi = current_project.map_info

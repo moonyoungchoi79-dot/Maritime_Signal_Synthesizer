@@ -82,10 +82,14 @@ class SimulationWorker(QObject):
                     'lat': start_lat,
                     'lon': start_lon,
                     'spd': s.raw_speeds.get(0, 5.0), # Base target speed
+                    'sog': s.raw_speeds.get(0, 5.0), # Actual noisy speed
                     'hdg': 0.0,
                     'path_idx': 0,
                     'dist_from_last_point': 0.0,
+                    'total_dist_traveled': 0.0,
                     'following_path': True,
+                    'manual_speed': False,
+                    'manual_heading': False,
                     'rng': s_rng
                 }
             
@@ -164,13 +168,13 @@ class SimulationWorker(QObject):
                 if own_ship and own_ship.raw_points:
                       own_state = self.update_and_get_state(own_ship, dT)
                       px, py = coords_to_pixel(own_state['lat_deg'], own_state['lon_deg'], mi)
-                      current_positions[own_idx] = (px, py, own_state['heading_true_deg'])
+                      current_positions[own_idx] = (px, py, own_state['heading_true_deg'], own_state['sog_knots'])
 
                 for tgt in self.active_ships:
                     if tgt.idx == own_idx: continue 
                     tgt_state = self.update_and_get_state(tgt, dT)
                     px, py = coords_to_pixel(tgt_state['lat_deg'], tgt_state['lon_deg'], mi)
-                    current_positions[tgt.idx] = (px, py, tgt_state['heading_true_deg'])
+                    current_positions[tgt.idx] = (px, py, tgt_state['heading_true_deg'], tgt_state['sog_knots'])
                     if own_ship and own_state:
                         self.generate_ais_radar_group(own_ship, tgt, tgt_state, ts_val)
                 
@@ -265,7 +269,7 @@ class SimulationWorker(QObject):
         if ship_idx not in self.dynamic_ships:
             # Should not happen if refresh_active_ships is correct, but safe fallback?
             return
-        
+        self.dynamic_ships[ship_idx]['manual_speed'] = True
         self.dynamic_ships[ship_idx]['spd'] = speed_kn
         self.log_message.emit(f"[Manual] Speed changed for {ship.name} to {speed_kn} kn")
 
@@ -366,11 +370,13 @@ class SimulationWorker(QObject):
         
         if evt.action_type == "STOP":
             dyn['spd'] = 0.0
+            dyn['manual_speed'] = True
         elif evt.action_type == "CHANGE_SPEED":
             dyn['spd'] = evt.action_value
             # Re-enable path following if we weren't manually steering
             if not dyn.get('manual_heading', False):
                 dyn['following_path'] = True
+            dyn['manual_speed'] = True
         elif evt.action_type == "CHANGE_HEADING":
             dyn['hdg'] = evt.action_value
             dyn['manual_heading'] = True
@@ -399,7 +405,7 @@ class SimulationWorker(QObject):
         # Helper to return current state dict for event checking
         if ship.idx in self.dynamic_ships:
             dyn = self.dynamic_ships[ship.idx]
-            sog = dyn['spd']
+            sog = dyn.get('sog', dyn['spd'])
             return {
                 "lat_deg": dyn['lat'],
                 "lon_deg": dyn['lon'],
@@ -420,9 +426,12 @@ class SimulationWorker(QObject):
              # Initialize on fly if missing (e.g. added during sim?)
              s_seed = (self.proj.seed + ship.idx) % (2**32 - 1)
              self.dynamic_ships[ship.idx] = {
-                'lat': 0, 'lon': 0, 'spd': 5.0, 'hdg': 0, 'path_idx': 0, 
-                'dist_from_last_point': 0.0, 'following_path': True, 'rng': random.Random(s_seed)
+                'lat': 0, 'lon': 0, 'spd': 5.0, 'sog': 5.0, 'hdg': 0, 'path_idx': 0, 
+                'dist_from_last_point': 0.0, 'total_dist_traveled': 0.0,
+                'following_path': True, 'manual_speed': False, 'manual_heading': False,
+                'rng': random.Random(s_seed),
              }
+             
              if ship.resampled_points:
                  px, py = ship.resampled_points[0]
                  _, _, lat, lon = pixel_to_coords(px, py, mi)
@@ -546,6 +555,7 @@ class SimulationWorker(QObject):
                 if dist_to_next > dist_remain_m:
                     # Move intermediate
                     dist_from_last += dist_remain_m
+                    dyn['total_dist_traveled'] += dist_remain_m
                     frac = dist_from_last / d_seg_total if d_seg_total > 0 else 0
                     
                     dyn['lat'] = lat_curr + (lat_next - lat_curr) * frac
@@ -574,6 +584,7 @@ class SimulationWorker(QObject):
                     dyn['lat'] = lat_next
                     dyn['lon'] = lon_next
                     dist_remain_m -= dist_to_next
+                    dyn['total_dist_traveled'] += dist_to_next
                     current_idx += 1
                     dyn['path_idx'] = current_idx
                     dyn['dist_from_last_point'] = 0.0
@@ -591,6 +602,7 @@ class SimulationWorker(QObject):
                     
                     dyn['lat'] += d_lat
                     dyn['lon'] += d_lon
+                    dyn['total_dist_traveled'] += dist_remain_m
                     
                     # Clamp
                     if dyn['lat'] > 90: dyn['lat'] = 90; dyn['spd'] = 0
@@ -612,6 +624,7 @@ class SimulationWorker(QObject):
             
             dyn['lat'] += d_lat
             dyn['lon'] += d_lon
+            dyn['total_dist_traveled'] += (dist_nm * 1852.0)
             if dyn['lat'] > 90: dyn['lat'] = 90; dyn['spd'] = 0
             elif dyn['lat'] < -90: dyn['lat'] = -90; dyn['spd'] = 0
             

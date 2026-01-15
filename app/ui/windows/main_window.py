@@ -536,7 +536,14 @@ class MainWindow(QMainWindow):
             self.data_table.setItem(i, 1, QTableWidgetItem(str(i)))
             self.data_table.setItem(i, 2, QTableWidgetItem(f"{lat:.6f}"))
             self.data_table.setItem(i, 3, QTableWidgetItem(f"{normalize_lon(lon):.6f}"))
-            self.data_table.setItem(i, 4, QTableWidgetItem(f"{spd:.1f}"))
+
+            if i == 0:
+                self.data_table.setItem(i, 4, QTableWidgetItem(f"{spd:.1f}"))
+            else:
+                item = QTableWidgetItem("-")
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.data_table.setItem(i, 4, item)
+
             self.data_table.setItem(i, 5, QTableWidgetItem(str(ship.mmsi)))
         self.data_table.blockSignals(False)
 
@@ -579,11 +586,12 @@ class MainWindow(QMainWindow):
                     self.handle_path_change(ship, redraw=False) 
                 except: pass
             elif col == 4: 
-                try:
-                    spd = float(item.text())
-                    ship.raw_speeds[row] = spd
-                    self.invalidate_simulation_data(ship)
-                except: pass
+                if row == 0:
+                    try:
+                        spd = float(item.text())
+                        ship.raw_speeds[row] = spd
+                        self.invalidate_simulation_data(ship)
+                    except: pass
             
             self.redraw_map()
             self.data_changed.emit()
@@ -808,16 +816,14 @@ class MainWindow(QMainWindow):
         f = QFormLayout(d)
         spin_spd = QDoubleSpinBox()
         spin_spd.setRange(0, 1000)
-        prev_spd = 100.0
-        if ship.raw_speeds:
-             last_idx = len(ship.raw_points) - 1
-             if last_idx in ship.raw_speeds:
-                 prev_spd = ship.raw_speeds[last_idx]
-        spin_spd.setValue(prev_spd)
+
+        is_first_point = (len(ship.raw_points) == 0)
+        if is_first_point:
+            spin_spd.setValue(10.0)
+            f.addRow("Speed (kn):", spin_spd)
 
         edit_note = QLineEdit()
         
-        f.addRow("Speed (kn):", spin_spd)
         f.addRow("Note:", edit_note)
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         bb.accepted.connect(d.accept)
@@ -827,7 +833,8 @@ class MainWindow(QMainWindow):
         if d.exec() == QDialog.DialogCode.Accepted:
             new_idx = len(ship.raw_points)
             ship.raw_points.append((px, py))
-            ship.raw_speeds[new_idx] = spin_spd.value()
+            if is_first_point:
+                ship.raw_speeds[new_idx] = spin_spd.value()
             ship.raw_notes[new_idx] = edit_note.text()
             self.handle_path_change(ship)
 

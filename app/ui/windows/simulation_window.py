@@ -959,7 +959,9 @@ class SimulationWindow(QWidget):
     def update_positions(self, pos_dict):
         # Update Trails
         settings = current_project.settings
-        for idx, (px, py, _) in pos_dict.items():
+        for idx, data in pos_dict.items():
+            px, py = data[0], data[1]
+            
             if idx not in self.ship_trails:
                 self.ship_trails[idx] = []
             
@@ -1034,7 +1036,10 @@ class SimulationWindow(QWidget):
         else:
             self.eta_label.setText("-")
 
-        for idx, (px, py, heading) in pos_dict.items():
+        for idx, data in pos_dict.items():
+            px, py = data[0], data[1]
+            heading = data[2]
+            
             ship = current_project.get_ship_by_idx(idx)
             if not ship: continue
 
@@ -1061,7 +1066,8 @@ class SimulationWindow(QWidget):
         follow_idx = self.combo_follow.currentData()
         if follow_idx is not None and follow_idx != -1:
             if follow_idx in pos_dict:
-                px, py, _ = pos_dict[follow_idx]
+                data = pos_dict[follow_idx]
+                px, py = data[0], data[1]
                 self.view.centerOn(px, py)
 
     def on_export_data(self, ready):
