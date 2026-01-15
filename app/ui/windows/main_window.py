@@ -1342,7 +1342,7 @@ class MainWindow(QMainWindow):
                 "traveled_path_thickness": p.settings.traveled_path_thickness,
                 "mask_color": p.settings.mask_color,
                 "dropout_probs": p.settings.dropout_probs,
-                "theme_mode": p.settings.theme_mode
+                "theme_mode": p.settings.theme_mode,
                 "simulation_speed_variance": getattr(p.settings, "simulation_speed_variance", 0.1)
             },
             # Minimal info in project.json, full data in subfolders/files

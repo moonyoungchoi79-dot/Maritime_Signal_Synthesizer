@@ -11,7 +11,7 @@ from PyQt6.QtCore import QObject, pyqtSignal, Qt, QPointF, QCoreApplication
 from PyQt6.QtGui import QPolygonF
 
 from app.core.models.project import current_project
-from app.core.geometry import haversine_distance, pixel_to_coords, coords_to_pixel, normalize_lon, lla_to_ecef, ecef_to_lla
+from app.core.geometry import haversine_distance, pixel_to_coords, coords_to_pixel, normalize_lon
 from app.core.nmea import calculate_checksum, encode_ais_payload
 
 class SimulationWorker(QObject):
@@ -161,7 +161,7 @@ class SimulationWorker(QObject):
                 current_positions = {}
                 
                 own_state = None
-                if own_ship and own_ship.is_generated:
+                if own_ship and own_ship.raw_points:
                       own_state = self.update_and_get_state(own_ship, dT)
                       px, py = coords_to_pixel(own_state['lat_deg'], own_state['lon_deg'], mi)
                       current_positions[own_idx] = (px, py, own_state['heading_true_deg'])
@@ -431,62 +431,31 @@ class SimulationWorker(QObject):
 
         dyn = self.dynamic_ships[ship.idx]
             
-            # --- Guidance Logic for Maneuvers ---
-            if dyn.get('mode') == 'RETURN_TO_PATH':
-                c_lat, c_lon = dyn['lat'], dyn['lon']
-                c_px, c_py = coords_to_pixel(c_lat, c_lon, mi)
+        # --- Guidance Logic for Maneuvers ---
+        if dyn.get('mode') == 'RETURN_TO_PATH':
+            c_lat, c_lon = dyn['lat'], dyn['lon']
+            c_px, c_py = coords_to_pixel(c_lat, c_lon, mi)
+            
+            best_idx = -1
+            best_dist_sq = float('inf')
+            
+            for i, (px, py) in enumerate(ship.resampled_points):
+                d2 = (px - c_px)**2 + (py - c_py)**2
+                if d2 < best_dist_sq:
+                    best_dist_sq = d2
+                    best_idx = i
+            
+            if best_idx != -1:
+                t_px, t_py = ship.resampled_points[best_idx]
+                _, _, t_lat, t_lon = pixel_to_coords(t_px, t_py, mi)
+                dist_m = haversine_distance(c_lat, c_lon, t_lat, t_lon)
                 
-                best_idx = -1
-                best_dist_sq = float('inf')
-                
-                for i, (px, py) in enumerate(ship.resampled_points):
-                    d2 = (px - c_px)**2 + (py - c_py)**2
-                    if d2 < best_dist_sq:
-                        best_dist_sq = d2
-                        best_idx = i
-                
-                if best_idx != -1:
-                    t_px, t_py = ship.resampled_points[best_idx]
-                    _, _, t_lat, t_lon = pixel_to_coords(t_px, t_py, mi)
-                    dist_m = haversine_distance(c_lat, c_lon, t_lat, t_lon)
-                    
-                    if dist_m < 30: # 30m threshold to snap to path following
-                        dyn['mode'] = 'FOLLOW_PATH_GEOMETRY'
-                        dyn['current_path_idx'] = best_idx
-                    else:
-                        # Steer to closest point (shortest distance)
-                        target_idx = min(len(ship.resampled_points)-1, best_idx + 1)
-                        t_px, t_py = ship.resampled_points[target_idx]
-                        _, _, target_lat, target_lon = pixel_to_coords(t_px, t_py, mi)
-                        
-                        d_lat = target_lat - c_lat
-                        mid_lat = (c_lat + target_lat) / 2.0
-                        d_lon = (target_lon - c_lon) * math.cos(math.radians(mid_lat))
-                        
-                        if abs(d_lat) > 1e-9 or abs(d_lon) > 1e-9:
-                            req_hdg = math.degrees(math.atan2(d_lon, d_lat))
-                            dyn['hdg'] = (req_hdg + 360) % 360
-
-            elif dyn.get('mode') == 'FOLLOW_PATH_GEOMETRY':
-                idx = dyn.get('current_path_idx', 0)
-                c_lat, c_lon = dyn['lat'], dyn['lon']
-                c_px, c_py = coords_to_pixel(c_lat, c_lon, mi)
-                
-                best_idx = idx
-                min_d = float('inf')
-                search_limit = min(len(ship.resampled_points), idx + 200)
-                
-                for i in range(idx, search_limit):
-                    px, py = ship.resampled_points[i]
-                    d = (px - c_px)**2 + (py - c_py)**2
-                    if d < min_d:
-                        min_d = d
-                        best_idx = i
-                
-                dyn['current_path_idx'] = best_idx
-                target_idx = min(len(ship.resampled_points)-1, best_idx + 5)
-                
-                if target_idx > best_idx:
+                if dist_m < 30: # 30m threshold to snap to path following
+                    dyn['mode'] = 'FOLLOW_PATH_GEOMETRY'
+                    dyn['current_path_idx'] = best_idx
+                else:
+                    # Steer to closest point (shortest distance)
+                    target_idx = min(len(ship.resampled_points)-1, best_idx + 1)
                     t_px, t_py = ship.resampled_points[target_idx]
                     _, _, target_lat, target_lon = pixel_to_coords(t_px, t_py, mi)
                     
@@ -495,147 +464,178 @@ class SimulationWorker(QObject):
                     d_lon = (target_lon - c_lon) * math.cos(math.radians(mid_lat))
                     
                     if abs(d_lat) > 1e-9 or abs(d_lon) > 1e-9:
-                         req_hdg = math.degrees(math.atan2(d_lon, d_lat))
-                         dyn['hdg'] = (req_hdg + 360) % 360
-                elif best_idx == len(ship.resampled_points)-1:
-                    dyn['spd'] = 0.0
+                        req_hdg = math.degrees(math.atan2(d_lon, d_lat))
+                        dyn['hdg'] = (req_hdg + 360) % 360
 
-            # --- Movement Logic ---
+        elif dyn.get('mode') == 'FOLLOW_PATH_GEOMETRY':
+            idx = dyn.get('current_path_idx', 0)
+            c_lat, c_lon = dyn['lat'], dyn['lon']
+            c_px, c_py = coords_to_pixel(c_lat, c_lon, mi)
             
-            # 1. Determine Target Speed
-            # dyn['spd'] holds the current target speed (mean)
+            best_idx = idx
+            min_d = float('inf')
+            search_limit = min(len(ship.resampled_points), idx + 200)
+            
+            for i in range(idx, search_limit):
+                px, py = ship.resampled_points[i]
+                d = (px - c_px)**2 + (py - c_py)**2
+                if d < min_d:
+                    min_d = d
+                    best_idx = i
+            
+            dyn['current_path_idx'] = best_idx
+            target_idx = min(len(ship.resampled_points)-1, best_idx + 5)
+            
+            if target_idx > best_idx:
+                t_px, t_py = ship.resampled_points[target_idx]
+                _, _, target_lat, target_lon = pixel_to_coords(t_px, t_py, mi)
+                
+                d_lat = target_lat - c_lat
+                mid_lat = (c_lat + target_lat) / 2.0
+                d_lon = (target_lon - c_lon) * math.cos(math.radians(mid_lat))
+                
+                if abs(d_lat) > 1e-9 or abs(d_lon) > 1e-9:
+                        req_hdg = math.degrees(math.atan2(d_lon, d_lat))
+                        dyn['hdg'] = (req_hdg + 360) % 360
+            elif best_idx == len(ship.resampled_points)-1:
+                dyn['spd'] = 0.0
 
-            # 2. Apply Noise
-            variance = getattr(self.proj.settings, "simulation_speed_variance", 0.1)
-            sigma = math.sqrt(variance)
-            noise = dyn['rng'].gauss(0, sigma)
+        # --- Movement Logic ---
+        
+        # 1. Determine Target Speed
+        # dyn['spd'] holds the current target speed (mean)
+
+        # 2. Apply Noise
+        variance = getattr(self.proj.settings, "simulation_speed_variance", 0.1)
+        sigma = math.sqrt(variance)
+        noise = dyn['rng'].gauss(0, sigma)
+        
+        # Only apply noise if moving
+        if dyn['spd'] > 0.01:
+            current_speed = max(0.0, dyn['spd'] + noise)
+        else:
+            current_speed = 0.0
+        
+        dist_step_m = current_speed * 1852.0 * (dT / 3600.0)
+        
+        if dyn.get('following_path') and ship.resampled_points:
+            dist_remain_m = dist_step_m
             
-            # Only apply noise if moving
-            if dyn['spd'] > 0.01:
-                current_speed = max(0.0, dyn['spd'] + noise)
-            else:
-                current_speed = 0.0
+            current_idx = dyn.get('path_idx', 0)
+            dist_from_last = dyn.get('dist_from_last_point', 0.0)
             
-            dist_step_m = current_speed * 1852.0 * (dT / 3600.0)
+            if current_idx >= len(ship.resampled_points) - 1:
+                    # Already at end, switch to vector movement
+                    dyn['following_path'] = False
             
-            if dyn.get('following_path') and ship.resampled_points:
-                dist_remain_m = dist_step_m
-                
-                current_idx = dyn.get('path_idx', 0)
-                dist_from_last = dyn.get('dist_from_last_point', 0.0)
-                
+            while dist_remain_m > 0 and dyn.get('following_path'):
                 if current_idx >= len(ship.resampled_points) - 1:
-                     # Already at end, switch to vector movement
-                     dyn['following_path'] = False
+                    dyn['following_path'] = False
+                    break
                 
-                while dist_remain_m > 0 and dyn.get('following_path'):
-                    if current_idx >= len(ship.resampled_points) - 1:
-                        dyn['following_path'] = False
-                        break
+                p_next = ship.resampled_points[current_idx + 1]
+                _, _, lat_next, lon_next = pixel_to_coords(p_next[0], p_next[1], mi)
+                
+                # Distance from current point (idx) to next (idx+1)
+                p_curr = ship.resampled_points[current_idx]
+                _, _, lat_curr, lon_curr = pixel_to_coords(p_curr[0], p_curr[1], mi)
+                d_seg_total = haversine_distance(lat_curr, lon_curr, lat_next, lon_next)
+                
+                dist_to_next = d_seg_total - dist_from_last
+                
+                if dist_to_next > dist_remain_m:
+                    # Move intermediate
+                    dist_from_last += dist_remain_m
+                    frac = dist_from_last / d_seg_total if d_seg_total > 0 else 0
                     
-                    p_next = ship.resampled_points[current_idx + 1]
-                    _, _, lat_next, lon_next = pixel_to_coords(p_next[0], p_next[1], mi)
+                    dyn['lat'] = lat_curr + (lat_next - lat_curr) * frac
                     
-                    # Distance from current point (idx) to next (idx+1)
-                    p_curr = ship.resampled_points[current_idx]
-                    _, _, lat_curr, lon_curr = pixel_to_coords(p_curr[0], p_curr[1], mi)
-                    d_seg_total = haversine_distance(lat_curr, lon_curr, lat_next, lon_next)
+                    d_lon = lon_next - lon_curr
+                    if d_lon > 180: d_lon -= 360
+                    elif d_lon < -180: d_lon += 360
                     
-                    dist_to_next = d_seg_total - dist_from_last
+                    dyn['lon'] = normalize_lon(lon_curr + d_lon * frac)
                     
-                    if dist_to_next > dist_remain_m:
-                        # Move intermediate
-                        dist_from_last += dist_remain_m
-                        frac = dist_from_last / d_seg_total if d_seg_total > 0 else 0
-                        
-                        dyn['lat'] = lat_curr + (lat_next - lat_curr) * frac
-                        
-                        d_lon = lon_next - lon_curr
-                        if d_lon > 180: d_lon -= 360
-                        elif d_lon < -180: d_lon += 360
-                        
-                        dyn['lon'] = normalize_lon(lon_curr + d_lon * frac)
-                        
-                        # Update heading to face next point
-                        d_lat_d = lat_next - lat_curr
-                        mid_lat = (lat_curr + lat_next) / 2.0
-                        d_lon_d = (lon_next - lon_curr)
-                        if d_lon_d > 180: d_lon_d -= 360
-                        elif d_lon_d < -180: d_lon_d += 360
-                        d_lon_d = d_lon_d * math.cos(math.radians(mid_lat))
-                        
-                        if abs(d_lat_d) > 1e-9 or abs(d_lon_d) > 1e-9:
-                            dyn['hdg'] = (math.degrees(math.atan2(d_lon_d, d_lat_d)) + 360) % 360
-                        
-                        dyn['dist_from_last_point'] = dist_from_last
-                        dist_remain_m = 0
-                    else:
-                        # Reached waypoint
-                        dyn['lat'] = lat_next
-                        dyn['lon'] = lon_next
-                        dist_remain_m -= dist_to_next
-                        current_idx += 1
-                        dyn['path_idx'] = current_idx
-                        dyn['dist_from_last_point'] = 0.0
-                
-                # If we switched to vector mode (end of path) and still have distance
-                if not dyn.get('following_path') and dist_remain_m > 0:
-                     dist_nm = dist_remain_m / 1852.0
-                     dist_deg = dist_nm / 60.0
-                     
-                     d_lat = dist_deg * math.cos(math.radians(dyn['hdg']))
-                     mid_lat = dyn['lat'] + d_lat/2
-                     cos_mid = math.cos(math.radians(mid_lat))
-                     if abs(cos_mid) < 0.01: cos_mid = 0.01
-                     d_lon = dist_deg * math.sin(math.radians(dyn['hdg'])) / cos_mid
-                     
-                     dyn['lat'] += d_lat
-                     dyn['lon'] += d_lon
-                     
-                     # Clamp
-                     if dyn['lat'] > 90: dyn['lat'] = 90; dyn['spd'] = 0
-                     elif dyn['lat'] < -90: dyn['lat'] = -90; dyn['spd'] = 0
-                     
-                     dyn['lon'] = normalize_lon(dyn['lon'])
-
-            else:
-                # Update position based on current speed/heading
-                dist_nm = current_speed * (dT / 3600.0)
-                dist_deg = dist_nm / 60.0
-                
-                d_lat = dist_deg * math.cos(math.radians(dyn['hdg']))
-                
-                mid_lat = dyn['lat'] + d_lat/2
-                cos_mid = math.cos(math.radians(mid_lat))
-                if abs(cos_mid) < 0.01: cos_mid = 0.01
-                d_lon = dist_deg * math.sin(math.radians(dyn['hdg'])) / cos_mid
-                
-                dyn['lat'] += d_lat
-                dyn['lon'] += d_lon
-                if dyn['lat'] > 90: dyn['lat'] = 90; dyn['spd'] = 0
-                elif dyn['lat'] < -90: dyn['lat'] = -90; dyn['spd'] = 0
-                
-                # Clamp lat
-                if dyn['lat'] > 90: dyn['lat'] = 90
-                elif dyn['lat'] < -90: dyn['lat'] = -90
-                
-                dyn['lon'] = normalize_lon(dyn['lon'])
-
-            sog = current_speed
-            cog = dyn['hdg']
-            sog_kmh = sog * 1.852
-            sog_mps = sog * 0.51444444
+                    # Update heading to face next point
+                    d_lat_d = lat_next - lat_curr
+                    mid_lat = (lat_curr + lat_next) / 2.0
+                    d_lon_d = (lon_next - lon_curr)
+                    if d_lon_d > 180: d_lon_d -= 360
+                    elif d_lon_d < -180: d_lon_d += 360
+                    d_lon_d = d_lon_d * math.cos(math.radians(mid_lat))
+                    
+                    if abs(d_lat_d) > 1e-9 or abs(d_lon_d) > 1e-9:
+                        dyn['hdg'] = (math.degrees(math.atan2(d_lon_d, d_lat_d)) + 360) % 360
+                    
+                    dyn['dist_from_last_point'] = dist_from_last
+                    dist_remain_m = 0
+                else:
+                    # Reached waypoint
+                    dyn['lat'] = lat_next
+                    dyn['lon'] = lon_next
+                    dist_remain_m -= dist_to_next
+                    current_idx += 1
+                    dyn['path_idx'] = current_idx
+                    dyn['dist_from_last_point'] = 0.0
             
-            return {
-                "lat_deg": dyn['lat'],
-                "lon_deg": dyn['lon'],
-                "sog_knots": sog,
-                "sog_kmh": sog_kmh,
-                "sog_mps": sog_mps,
-                "cog_true_deg": cog,
-                "heading_true_deg": cog,
-                "elapsed_sec": 0 # Not used
-            }
+            # If we switched to vector mode (end of path) and still have distance
+            if not dyn.get('following_path') and dist_remain_m > 0:
+                    dist_nm = dist_remain_m / 1852.0
+                    dist_deg = dist_nm / 60.0
+                    
+                    d_lat = dist_deg * math.cos(math.radians(dyn['hdg']))
+                    mid_lat = dyn['lat'] + d_lat/2
+                    cos_mid = math.cos(math.radians(mid_lat))
+                    if abs(cos_mid) < 0.01: cos_mid = 0.01
+                    d_lon = dist_deg * math.sin(math.radians(dyn['hdg'])) / cos_mid
+                    
+                    dyn['lat'] += d_lat
+                    dyn['lon'] += d_lon
+                    
+                    # Clamp
+                    if dyn['lat'] > 90: dyn['lat'] = 90; dyn['spd'] = 0
+                    elif dyn['lat'] < -90: dyn['lat'] = -90; dyn['spd'] = 0
+                    
+                    dyn['lon'] = normalize_lon(dyn['lon'])
+
+        else:
+            # Update position based on current speed/heading
+            dist_nm = current_speed * (dT / 3600.0)
+            dist_deg = dist_nm / 60.0
+            
+            d_lat = dist_deg * math.cos(math.radians(dyn['hdg']))
+            
+            mid_lat = dyn['lat'] + d_lat/2
+            cos_mid = math.cos(math.radians(mid_lat))
+            if abs(cos_mid) < 0.01: cos_mid = 0.01
+            d_lon = dist_deg * math.sin(math.radians(dyn['hdg'])) / cos_mid
+            
+            dyn['lat'] += d_lat
+            dyn['lon'] += d_lon
+            if dyn['lat'] > 90: dyn['lat'] = 90; dyn['spd'] = 0
+            elif dyn['lat'] < -90: dyn['lat'] = -90; dyn['spd'] = 0
+            
+            # Clamp lat
+            if dyn['lat'] > 90: dyn['lat'] = 90
+            elif dyn['lat'] < -90: dyn['lat'] = -90
+            
+            dyn['lon'] = normalize_lon(dyn['lon'])
+
+        sog = current_speed
+        cog = dyn['hdg']
+        sog_kmh = sog * 1.852
+        sog_mps = sog * 0.51444444
+        
+        return {
+            "lat_deg": dyn['lat'],
+            "lon_deg": dyn['lon'],
+            "sog_knots": sog,
+            "sog_kmh": sog_kmh,
+            "sog_mps": sog_mps,
+            "cog_true_deg": cog,
+            "heading_true_deg": cog,
+            "elapsed_sec": 0 # Not used
+        }
 
     def send_nmea(self, raw, ts_obj):
         self.signal_generated.emit(raw)
@@ -671,19 +671,19 @@ class SimulationWorker(QObject):
 
         std_dev = np.sqrt(variance)
         
-        x, y, z = lla_to_ecef(lat, lon, 0)
+        # Approximate conversion: meters to degrees
+        # 1 deg lat ~= 111,111 meters
+        # 1 deg lon ~= 111,111 * cos(lat) meters
+        meters_per_deg_lat = 111111.0
+        meters_per_deg_lon = 111111.0 * math.cos(math.radians(lat))
         
-        noise_x = np.random.normal(0, std_dev)
-        noise_y = np.random.normal(0, std_dev)
-        noise_z = np.random.normal(0, std_dev)
+        noise_n_m = random.gauss(0, std_dev) # North offset in meters
+        noise_e_m = random.gauss(0, std_dev) # East offset in meters
         
-        noisy_x = x + noise_x
-        noisy_y = y + noise_y
-        noisy_z = z + noise_z
+        d_lat = noise_n_m / meters_per_deg_lat
+        d_lon = noise_e_m / meters_per_deg_lon if abs(meters_per_deg_lon) > 1e-6 else 0.0
         
-        noisy_lat, noisy_lon, _ = ecef_to_lla(noisy_x, noisy_y, noisy_z)
-        
-        return noisy_lat, noisy_lon
+        return lat + d_lat, lon + d_lon
 
     def generate_ais_radar_group(self, own, tgt, state, ts_val):
         jitter_ts = self.get_jittered_time(ts_val)

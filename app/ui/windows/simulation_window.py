@@ -74,8 +74,8 @@ class SimulationWindow(QWidget):
                 QMessageBox.warning(self, "Warning", "자선(Own Ship)이 설정되어 있지 않습니다. 랜덤 타겟을 생성할 수 없습니다.")
                 return
             
-            if not own_ship.is_generated:
-                QMessageBox.warning(self, "Warning", "자선(Own Ship)의 속도 및 경로 데이터가 생성되지 않았습니다. 메인 화면에서 'Open Speed Panel'을 통해 속도 데이터를 먼저 생성해주세요.")
+            if not own_ship.raw_points:
+                QMessageBox.warning(self, "Warning", "자선(Own Ship)의 경로 데이터가 없습니다. 메인 화면에서 경로를 먼저 생성해주세요.")
                 return
 
             self.generate_random_targets_logic(own_ship, R, N_AI_only, N_RA_only, N_both)
@@ -264,21 +264,16 @@ class SimulationWindow(QWidget):
         # Get Own Ship state at t_now
         own_lat, own_lon, own_spd_kn = 0.0, 0.0, 0.0
         
-        # Find index in own_ship data corresponding to t_now
-        if own_ship.cumulative_time:
-            times = np.array(own_ship.cumulative_time)
-            idx = np.searchsorted(times, t_now)
-            if idx >= len(times): idx = len(times) - 1
-            
-            # Interpolate or take nearest
-            # For simplicity, taking the node value. In a real engine, we interpolate.
-            # Here we use the raw points/speeds logic or the generated nodes.
-            # Let's use the generated node data.
-            
-            mi = current_project.map_info
-            px, py = own_ship.resampled_points[idx] # This is pixel
+        mi = current_project.map_info
+        
+        # Use current dynamic state if available, otherwise start pos
+        if self.worker and self.worker.running and own_ship.idx in self.worker.dynamic_ships:
+            dyn = self.worker.dynamic_ships[own_ship.idx]
+            own_lat, own_lon, own_spd_kn = dyn['lat'], dyn['lon'], dyn['spd']
+        elif own_ship.resampled_points:
+            px, py = own_ship.resampled_points[0]
             _, _, own_lat, own_lon = pixel_to_coords(px, py, mi)
-            own_spd_kn = own_ship.node_velocities_kn[idx]
+            own_spd_kn = own_ship.raw_speeds.get(0, 5.0)
 
         # 2. Generation Loop
         total_targets = N_ai + N_ra + N_both
@@ -320,8 +315,8 @@ class SimulationWindow(QWidget):
             heading = random.random() * 360.0
             
             # Generate Path from t_now to End of Own Ship Duration
-            duration_remaining = own_ship.total_duration_sec - t_now
-            if duration_remaining < 1.0: duration_remaining = 1.0
+            # Since we don't know duration, we just generate a path long enough (e.g. 24 hours)
+            duration_remaining = 24 * 3600.0
             
             # --- Zigzag Logic ---
             use_zigzag = current_project.settings.rtg_zigzag_enabled
@@ -346,10 +341,6 @@ class SimulationWindow(QWidget):
             
             px_start, py_start = coords_to_pixel(start_lat, start_lon, mi)
             raw_pixels = [(px_start, py_start)]
-            times = [t_now]
-            
-            total_actual_dur = 0.0
-            current_t = t_now
             
             for k, seg_dur in enumerate(segments):
                 dist_nm = spd * (seg_dur / 3600.0)
@@ -379,12 +370,8 @@ class SimulationWindow(QWidget):
                 px, py = coords_to_pixel(end_lat_seg, end_lon_seg, mi)
                 raw_pixels.append((px, py))
                 
-                current_t += (seg_dur * ratio)
-                times.append(current_t)
-
                 curr_lat = end_lat_seg
                 curr_lon = end_lon_seg
-                total_actual_dur += seg_dur * ratio
                 
                 if hit_boundary: break
                 
@@ -416,9 +403,6 @@ class SimulationWindow(QWidget):
             # Optimized: Use waypoints directly instead of dense resampling.
             # The simulation worker interpolates linearly between these points.
             new_ship.resampled_points = raw_pixels
-            new_ship.cumulative_time = times
-            new_ship.node_velocities_kn = [spd] * len(times)
-            new_ship.total_duration_sec = times[-1]
             
             # Set Signals
             if s_type == "AI":
@@ -697,7 +681,7 @@ class SimulationWindow(QWidget):
         
         # Sync Duration Spin (Only initialize if 0 to avoid overwriting user input)
         own_ship = current_project.get_ship_by_idx(current_project.settings.own_ship_idx)
-        if own_ship and own_ship.is_generated and self.duration_input.get_seconds() == 0:
+        if own_ship and own_ship.raw_points and self.duration_input.get_seconds() == 0:
             self.duration_input.blockSignals(True)
             self.duration_input.set_seconds(own_ship.total_duration_sec)
             self.duration_input.blockSignals(False)
@@ -895,7 +879,7 @@ class SimulationWindow(QWidget):
         self.highlighted_ship_idx = -1
 
         active_ships = [s for s in current_project.ships if s.is_generated]
-        if not active_ships:
+        if not current_project.ships:
             QMessageBox.warning(self, "Info", "No ships generated.")
             return
 
@@ -1025,10 +1009,10 @@ class SimulationWindow(QWidget):
         target_idx = self.highlighted_ship_idx
         if target_idx == -1:
              target_idx = current_project.settings.own_ship_idx
-             
+        
+        # Use Simulation Duration for ETA
         if target_idx != -1:
-            ship = current_project.get_ship_by_idx(target_idx)
-            if ship and ship.total_duration_sec > 0:
+            if self.worker:
                 t_now = 0.0
                 if self.worker:
                     t_now = self.worker.current_time
@@ -1177,44 +1161,30 @@ class SimulationWindow(QWidget):
                 self.worker_thread.deleteLater()
 
     def calculate_ship_state(self, ship, t_current):
-        if not ship.cumulative_time:
-            return {'lat':0, 'lon':0, 'spd':0, 'hdg':0}
-            
-        times = np.array(ship.cumulative_time)
-        if t_current >= times[-1]:
-            idx = len(times) - 2
-            alpha = 1.0
-        elif t_current <= times[0]:
-            idx = 0
-            alpha = 0.0
-        else:
-            idx = np.searchsorted(times, t_current, side='right') - 1
-            t1 = times[idx]
-            t2 = times[idx+1]
-            alpha = (t_current - t1) / (t2 - t1) if t2 > t1 else 0.0
-            
+        # If worker is running, return dynamic state
+        if self.worker and ship.idx in self.worker.dynamic_ships:
+            dyn = self.worker.dynamic_ships[ship.idx]
+            return {'lat': dyn['lat'], 'lon': dyn['lon'], 'spd': dyn['spd'], 'hdg': dyn['hdg']}
+
+        # If not running, return start position
         mi = current_project.map_info
-        p1 = ship.resampled_points[idx]
-        p2 = ship.resampled_points[idx+1]
-        
-        px = p1[0] + (p2[0] - p1[0]) * alpha
-        py = p1[1] + (p2[1] - p1[1]) * alpha
-        
-        _, _, lat, lon = pixel_to_coords(px, py, mi)
-        
-        v1 = ship.node_velocities_kn[idx]
-        v2 = ship.node_velocities_kn[idx+1]
-        spd = v1 + (v2 - v1) * alpha
-        
-        # Calculate Heading
-        _, _, lat1, lon1 = pixel_to_coords(p1[0], p1[1], mi)
-        _, _, lat2, lon2 = pixel_to_coords(p2[0], p2[1], mi)
-        d_lat = lat2 - lat1
-        d_lon = (lon2 - lon1) * math.cos(math.radians((lat1+lat2)/2))
-        hdg = math.degrees(math.atan2(d_lon, d_lat))
-        hdg = (hdg + 360) % 360
-        
-        return {'lat': lat, 'lon': normalize_lon(lon), 'spd': spd, 'hdg': hdg}
+        if ship.resampled_points:
+            px, py = ship.resampled_points[0]
+            _, _, lat, lon = pixel_to_coords(px, py, mi)
+            
+            # Initial heading
+            hdg = 0.0
+            if len(ship.resampled_points) > 1:
+                px2, py2 = ship.resampled_points[1]
+                _, _, lat2, lon2 = pixel_to_coords(px2, py2, mi)
+                d_lat = lat2 - lat
+                d_lon = (lon2 - lon) * math.cos(math.radians((lat+lat2)/2))
+                hdg = math.degrees(math.atan2(d_lon, d_lat))
+                hdg = (hdg + 360) % 360
+            
+            return {'lat': lat, 'lon': lon, 'spd': ship.raw_speeds.get(0, 0.0), 'hdg': hdg}
+            
+        return {'lat':0, 'lon':0, 'spd':0, 'hdg':0}
 
     def show_target_info(self, idx):
         ship = current_project.get_ship_by_idx(idx)
@@ -1225,10 +1195,11 @@ class SimulationWindow(QWidget):
             t_now = self.worker.current_time
             
         state = self.calculate_ship_state(ship, t_now)
+        sim_limit = self.duration_input.get_seconds()
         
-        eta_str = "-"
-        if ship.total_duration_sec > 0:
-             remaining = max(0, ship.total_duration_sec - t_now)
+        eta_str = "Unknown"
+        if sim_limit > 0:
+             remaining = max(0, sim_limit - t_now)
              d = int(remaining // 86400)
              h = int((remaining % 86400) // 3600)
              m = int((remaining % 3600) // 60)

@@ -11,7 +11,8 @@ from PyQt6.QtWidgets import (
     QTextEdit, QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox, QTableWidget, 
     QHeaderView, QGroupBox, QMessageBox, QFileDialog, QDialog, QGraphicsScene, QListWidget,
     QGraphicsItem, QGraphicsPathItem, QGraphicsPolygonItem, QGraphicsEllipseItem, 
-    QGraphicsTextItem, QAbstractSpinBox, QMenu, QGraphicsRectItem, QFormLayout, QInputDialog
+    QGraphicsTextItem, QAbstractSpinBox, QMenu, QGraphicsRectItem, QFormLayout, QInputDialog,
+    QGridLayout
 )
 from PyQt6.QtCore import (
     Qt, pyqtSignal, QThread, QTimer, QPointF
@@ -88,6 +89,20 @@ class TargetInfoDialog(QDialog):
             state = self.parent().calculate_ship_state(ship, t_now)
             
         eta_str = "Unknown"
+        
+        # Calculate ETA based on Simulation Duration
+        if self.parent() and hasattr(self.parent(), 'sim_time_limit'):
+             remaining = max(0, self.parent().sim_time_limit - t_now)
+             d = int(remaining // 86400)
+             h = int((remaining % 86400) // 3600)
+             m = int((remaining % 3600) // 60)
+             s = int(remaining % 60)
+             rem_parts = []
+             if d > 0: rem_parts.append(f"{d}d")
+             if h > 0: rem_parts.append(f"{h}h")
+             if m > 0: rem_parts.append(f"{m}m")
+             rem_parts.append(f"{s}s")
+             eta_str = " ".join(rem_parts)
         
         enabled_events_list = []
         for e in current_project.events:
@@ -418,6 +433,9 @@ class SimulationPanel(QWidget):
         status_layout.addWidget(self.list_active_events)
         right_layout.addWidget(self.status_group)
 
+        self.control_group = self.create_ship_control_group()
+        right_layout.addWidget(self.control_group)
+
         self.on_off_group = QGroupBox("Signal On/Off")
         on_off_layout = QVBoxLayout(self.on_off_group)
         self.on_off_table = self.create_signal_on_off_table()
@@ -480,6 +498,7 @@ class SimulationPanel(QWidget):
         
         self.draw_static_map()
         self.update_follow_combo()
+        self.update_control_combo()
 
     def generate_random_targets_logic(self, own_ship, R_nm, N_ai, N_ra, N_both, area_id=-1):
         # Set deterministic seed for RTG based on project seed and current ship count
@@ -917,6 +936,7 @@ class SimulationPanel(QWidget):
         self.interval_group.layout().addWidget(self.interval_table)
         
         self.update_follow_combo()
+        self.update_control_combo()
 
     def update_follow_combo(self):
         current_idx = self.combo_follow.currentData()
@@ -949,6 +969,116 @@ class SimulationPanel(QWidget):
         else: self.combo_follow.setCurrentIndex(0)
             
         self.combo_follow.blockSignals(False)
+
+    def create_ship_control_group(self):
+        group = QGroupBox("Manual Ship Control")
+        layout = QGridLayout(group)
+        
+        layout.addWidget(QLabel("Target:"), 0, 0)
+        self.combo_control_ship = QComboBox()
+        self.combo_control_ship.currentIndexChanged.connect(self.on_control_ship_changed)
+        layout.addWidget(self.combo_control_ship, 0, 1, 1, 2)
+        
+        self.btn_info = QPushButton("Info")
+        self.btn_info.clicked.connect(self.on_info_clicked)
+        layout.addWidget(self.btn_info, 0, 3)
+        
+        layout.addWidget(QLabel("Speed (kn):"), 1, 0)
+        self.spin_control_spd = QDoubleSpinBox()
+        self.spin_control_spd.setRange(0, 100)
+        self.spin_control_spd.setSingleStep(0.1)
+        layout.addWidget(self.spin_control_spd, 1, 1)
+        self.btn_set_spd = QPushButton("Set")
+        self.btn_set_spd.clicked.connect(self.on_set_speed_clicked)
+        layout.addWidget(self.btn_set_spd, 1, 2)
+        
+        layout.addWidget(QLabel("Heading (deg):"), 2, 0)
+        self.spin_control_hdg = QDoubleSpinBox()
+        self.spin_control_hdg.setRange(0, 360)
+        self.spin_control_hdg.setSingleStep(1.0)
+        self.spin_control_hdg.setWrapping(True)
+        layout.addWidget(self.spin_control_hdg, 2, 1)
+        self.btn_set_hdg = QPushButton("Set")
+        self.btn_set_hdg.clicked.connect(self.on_set_heading_clicked)
+        layout.addWidget(self.btn_set_hdg, 2, 2)
+        
+        return group
+
+    def update_control_combo(self):
+        current_idx = self.combo_control_ship.currentData()
+        self.combo_control_ship.blockSignals(True)
+        self.combo_control_ship.clear()
+        
+        own_idx = current_project.settings.own_ship_idx
+        own_ship = None
+        manual = []
+        random_tgts = []
+        
+        for s in current_project.ships:
+            if s.idx == own_idx: own_ship = s
+            elif s.idx >= 1000: random_tgts.append(s)
+            else: manual.append(s)
+            
+        manual.sort(key=lambda x: x.idx)
+        random_tgts.sort(key=lambda x: x.idx)
+        
+        sorted_ships = ([own_ship] if own_ship else []) + manual + random_tgts
+        
+        for s in sorted_ships:
+            tag = "Own" if s.idx == own_idx else ("R-Tgt" if s.idx >= 1000 else "Tgt")
+            self.combo_control_ship.addItem(f"[{tag}] {s.name}", s.idx)
+            
+        idx = self.combo_control_ship.findData(current_idx)
+        if idx >= 0: self.combo_control_ship.setCurrentIndex(idx)
+        elif self.combo_control_ship.count() > 0: self.combo_control_ship.setCurrentIndex(0)
+            
+        self.combo_control_ship.blockSignals(False)
+        self.on_control_ship_changed()
+
+    def set_control_ship(self, idx):
+        combo_idx = self.combo_control_ship.findData(idx)
+        if combo_idx >= 0:
+            self.combo_control_ship.setCurrentIndex(combo_idx)
+
+    def on_info_clicked(self):
+        idx = self.combo_control_ship.currentData()
+        if idx is not None:
+            self.open_target_info_dialog(idx)
+
+    def on_control_ship_changed(self):
+        idx = self.combo_control_ship.currentData()
+        if idx is None: return
+        
+        ship = current_project.get_ship_by_idx(idx)
+        if not ship: return
+        
+        spd = 0.0
+        hdg = 0.0
+        
+        if self.worker and self.worker.running and idx in self.worker.dynamic_ships:
+            dyn = self.worker.dynamic_ships[idx]
+            spd = dyn['spd']
+            hdg = dyn['hdg']
+        elif self.calculate_ship_state:
+             t_now = 0.0
+             st = self.calculate_ship_state(ship, t_now)
+             spd = st['spd']
+             hdg = st['hdg']
+             
+        self.spin_control_spd.setValue(spd)
+        self.spin_control_hdg.setValue(hdg)
+
+    def on_set_speed_clicked(self):
+        idx = self.combo_control_ship.currentData()
+        if idx is None: return
+        val = self.spin_control_spd.value()
+        self.request_ship_speed_change(idx, val)
+
+    def on_set_heading_clicked(self):
+        idx = self.combo_control_ship.currentData()
+        if idx is None: return
+        val = self.spin_control_hdg.value()
+        self.request_ship_heading_change(idx, val)
 
     def build_trail_path(self, points):
         pp = QPainterPath()
@@ -1715,6 +1845,11 @@ class SimulationPanel(QWidget):
         return {'lat':0, 'lon':0, 'spd':0, 'hdg':0}
 
     def show_target_info(self, idx):
+        self.set_control_ship(idx)
+        self.highlighted_ship_idx = idx
+        self.draw_static_map()
+
+    def open_target_info_dialog(self, idx):
         ship = current_project.get_ship_by_idx(idx)
         if not ship: return
 
