@@ -55,8 +55,8 @@ class SimulationWorker(QObject):
 
     def _densify_path(self, raw_points, mi, max_segment_m=100.0):
         """
-        경로를 Great Circle(대권) 방식으로 보간하여 밀집된 ECEF 좌표 리스트를 생성합니다.
-        3차원 벡터 보간 후 지표면 투영을 통해 지구 곡률을 따르는 매끄러운 경로를 만듭니다.
+        [수정됨] 제어점(Control Points) 사이를 대권(Great Circle)으로 연결하여 경로를 생성합니다.
+        화면상의 점선(직선/Rhumb Line) 보간을 따르지 않고, 지구 타원체 상의 최단 경로를 계산합니다.
         """
         if not raw_points or len(raw_points) < 2:
             ecef_pts = path_points_to_ecef(raw_points, mi)
@@ -64,47 +64,45 @@ class SimulationWorker(QObject):
 
         dense_ecef = []
         
-        # 1. Pixel -> LLA 변환
+        # 1. Pixel -> LLA 변환 (Control Points)
         lla_points = []
         for px, py in raw_points:
             _, _, lat, lon = pixel_to_coords(px, py, mi)
             lla_points.append((lat, lon))
 
-        # 2. 구간별 대권 보간 (Great Circle Interpolation)
+        # 2. 제어점 간 대권 보간 (Great Circle Interpolation)
         for i in range(len(lla_points) - 1):
             lat1, lon1 = lla_points[i]
             lat2, lon2 = lla_points[i+1]
             
-            # 시작점
             x1, y1, z1 = lla_to_ecef(lat1, lon1, 0.0)
             dense_ecef.append((x1, y1, z1))
             
             # 대권 거리 계산
             dist_m = haversine_distance(lat1, lon1, lat2, lon2)
-            
-            # 끝점
             x2, y2, z2 = lla_to_ecef(lat2, lon2, 0.0)
 
+            # 구간이 길면 잘게 쪼개어 대권상에 점을 배치 (Rail Logic의 부드러움을 위해)
             if dist_m > max_segment_m:
                 num_steps = int(math.ceil(dist_m / max_segment_m))
                 for s in range(1, num_steps):
                     frac = s / num_steps
                     
-                    # [핵심] ECEF 3D 보간 (현의 점 계산)
+                    # ECEF Slerp (지구 중심을 통과하는 현의 보간)
                     ix, iy, iz = ecef_interpolate(x1, y1, z1, x2, y2, z2, frac)
                     
-                    # [핵심] 지표면 투영 (Ellipsoid Surface Projection)
+                    # 지표면 투영 (고도 0m 보정) -> 대권상의 점이 됨
                     t_lat, t_lon, _ = ecef_to_lla(ix, iy, iz)
                     dx, dy, dz = lla_to_ecef(t_lat, t_lon, 0.0)
                     
                     dense_ecef.append((dx, dy, dz))
         
-        # 마지막 점 추가
+        # 마지막 제어점 추가
         last_lat, last_lon = lla_points[-1]
         lx, ly, lz = lla_to_ecef(last_lat, last_lon, 0.0)
         dense_ecef.append((lx, ly, lz))
         
-        # 3. 누적 거리(Cumulative Distance) 미리 계산 (Rail Logic용)
+        # 3. 누적 거리 계산 (Rail Logic 필수)
         cumulative_dists = [0.0]
         total_len = 0.0
         for i in range(len(dense_ecef) - 1):
@@ -138,16 +136,17 @@ class SimulationWorker(QObject):
                 s_seed = (self.proj.seed + s.idx) % (2**32 - 1)
                 s_rng = random.Random(s_seed)
 
-                start_px, start_py = s.resampled_points[0] if s.resampled_points else s.raw_points[0]
+                # 초기 위치
+                start_px, start_py = s.raw_points[0] # [수정] resampled가 아닌 raw_points 사용
                 _, _, start_lat, start_lon = pixel_to_coords(start_px, start_py, mi)
                 x, y, z = lla_to_ecef(start_lat, start_lon, 0.0)
 
-                points = s.resampled_points if s.resampled_points else s.raw_points
-                
-                # [수정] 경로와 거리 정보 함께 계산
+                # [수정] 제어점(raw_points) 기반으로 경로 생성 -> 대권 항로 보장
+                # resampled_points(점선)는 UI용이므로 물리 계산에서 배제
+                points = s.raw_points 
                 ecef_path, cum_dists, total_len = self._densify_path(points, mi)
 
-                # 초기 Heading 설정 (첫 구간의 대권 방향)
+                # 초기 Heading 설정
                 init_hdg = 0.0
                 if len(ecef_path) > 1:
                     tx, ty, tz = ecef_path[1]
@@ -159,7 +158,6 @@ class SimulationWorker(QObject):
                     'sog': s.raw_speeds.get(0, 5.0),
                     'hdg': init_hdg,
                     
-                    # Rail Logic 변수들
                     'dist_traveled': 0.0,      
                     'path_segment_idx': 0,     
                     'ecef_path': ecef_path,
@@ -190,9 +188,7 @@ class SimulationWorker(QObject):
             m = 0
             
             while self.running:
-                # Extra Time 지원을 위해 max_steps 초과 시에도 루프 유지
                 self.m = m
-                
                 QCoreApplication.processEvents()
                 
                 if self.paused:
@@ -289,7 +285,7 @@ class SimulationWorker(QObject):
         for s in new_ships:
             s_seed = (self.proj.seed + s.idx) % (2**32 - 1)
             s_rng = random.Random(s_seed)
-            points = s.resampled_points if s.resampled_points else s.raw_points
+            points = s.raw_points # [수정] raw_points 사용
             if not points: continue
             
             ecef_path, cum_dists, total_len = self._densify_path(points, mi)
@@ -431,21 +427,22 @@ class SimulationWorker(QObject):
             elif opt == "ChangeDestination_ToOriginalFinal":
                 ecef_path = dyn.get('ecef_path', [])
                 if ecef_path:
-                    # 벡터 모드로 전환, 초기 헤딩은 최종점 방향
                     tx, ty, tz = ecef_path[-1]
                     dyn['hdg'] = ecef_heading(dyn['x'], dyn['y'], dyn['z'], tx, ty, tz)
                     dyn['following_path'] = False 
                     dyn['manual_heading'] = True 
 
     def update_and_get_state(self, ship, dT):
-        # 안전장치: 동적 상태 없으면 초기화
+        # [수정] 동적 상태 초기화 로직 강화: 이미 존재하면 절대 초기화하지 않음
+        # 이로 인해 이벤트나 다른 로직으로 인해 dist_traveled가 0으로 리셋되는 문제 방지
         if ship.idx not in self.dynamic_ships:
             mi = self.proj.map_info
-            if ship.resampled_points:
-                px, py = ship.resampled_points[0]
+            if ship.raw_points: # raw_points 사용
+                px, py = ship.raw_points[0]
                 _, _, lat, lon = pixel_to_coords(px, py, mi)
                 x, y, z = lla_to_ecef(lat, lon, 0.0)
-                ecef_path, cum_dists, total_len = self._densify_path(ship.resampled_points, mi)
+                # raw_points 기반 대권 경로 생성
+                ecef_path, cum_dists, total_len = self._densify_path(ship.raw_points, mi)
             else:
                 x, y, z = lla_to_ecef(0, 0, 0.0)
                 ecef_path, cum_dists, total_len = [], [], 0.0
@@ -464,7 +461,7 @@ class SimulationWorker(QObject):
         cum_dists = dyn.get('cum_dists', [])
         total_len = dyn.get('total_path_len', 0.0)
 
-        # 1. 속도 및 노이즈 계산
+        # 1. 속도 및 이동 거리
         variance = getattr(self.proj.settings, "speed_variance", 1.0)
         sigma = math.sqrt(variance)
         noise = dyn['rng'].gauss(0, sigma)
@@ -483,7 +480,6 @@ class SimulationWorker(QObject):
             best_idx = 0
             best_dist = float('inf')
             
-            # 전체 경로 중 가장 가까운 점 찾기 (Global Minimum)
             for i in range(len(ecef_path)):
                 px, py, pz = ecef_path[i]
                 d = ecef_distance(cx, cy, cz, px, py, pz)
@@ -492,14 +488,12 @@ class SimulationWorker(QObject):
                     best_idx = i
             
             if best_dist <= move_dist_m * 1.5: 
-                # 복귀 성공
                 dyn['following_path'] = True
                 dyn['mode'] = None
                 dyn['dist_traveled'] = cum_dists[best_idx]
                 dyn['path_segment_idx'] = best_idx
                 dyn['x'], dyn['y'], dyn['z'] = ecef_path[best_idx]
             else:
-                # 복귀 중: 목표점을 향해 대권 항해
                 tx, ty, tz = ecef_path[best_idx]
                 target_hdg = ecef_heading(cx, cy, cz, tx, ty, tz)
                 
@@ -517,12 +511,11 @@ class SimulationWorker(QObject):
             if dyn['dist_traveled'] + move_dist_m <= total_len:
                 active_rail = True
             else:
-                # 경로 종료 -> Vector Mode
                 dyn['following_path'] = False 
                 active_rail = False
 
         if active_rail:
-            # --- RAIL MODE (경로 추종) ---
+            # --- RAIL MODE (대권 추종) ---
             dyn['dist_traveled'] += move_dist_m
             curr_d = dyn['dist_traveled']
             
@@ -539,15 +532,19 @@ class SimulationWorker(QObject):
             x1, y1, z1 = ecef_path[idx]
             x2, y2, z2 = ecef_path[idx+1]
             
-            # 대권 보간 위치
+            # [위치 업데이트] 대권 보간 위치
             dyn['x'], dyn['y'], dyn['z'] = ecef_interpolate(x1, y1, z1, x2, y2, z2, frac)
-            # 대권 접선 방향 헤딩
-            dyn['hdg'] = ecef_heading(x1, y1, z1, x2, y2, z2)
+            
+            # [핵심 수정: 헤딩 업데이트] "항상 언제나 매 순간 바뀌어야 함"
+            # 현재 위치(dyn)에서 다음 미세 경로점(x2, y2, z2)을 향하는 대권 방위각 계산
+            # 구간 전체가 아니라 '현재 점' 기준의 접선 방향을 구하므로 매 프레임 변함
+            dyn['hdg'] = ecef_heading(dyn['x'], dyn['y'], dyn['z'], x2, y2, z2)
             
         else:
             # --- VECTOR MODE (대권 자유 항해) ---
             if move_dist_m > 0:
                 lat, lon, _ = ecef_to_lla(dyn['x'], dyn['y'], dyn['z'])
+                # 현재 헤딩으로 대권 이동 -> 위치 이동에 따라 헤딩도 자동 변경됨
                 nlat, nlon, nhdg = self._move_great_circle_step(lat, lon, dyn['hdg'], move_dist_m)
                 
                 dyn['x'], dyn['y'], dyn['z'] = lla_to_ecef(nlat, nlon, 0.0)
@@ -587,8 +584,7 @@ class SimulationWorker(QObject):
         new_lat = math.degrees(new_lat_rad)
         new_lon = normalize_lon(math.degrees(new_lon_rad))
 
-        # New Heading (Final Bearing)
-        # Using Back Azimuth + 180 degrees
+        # New Heading (Final Bearing + 180 strategy)
         y = math.sin(lon_rad - new_lon_rad) * math.cos(lat_rad)
         x = math.cos(new_lat_rad) * math.sin(lat_rad) - \
             math.sin(new_lat_rad) * math.cos(lat_rad) * math.cos(lon_rad - new_lon_rad)
