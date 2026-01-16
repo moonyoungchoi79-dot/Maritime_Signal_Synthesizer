@@ -68,7 +68,7 @@ class EventEditorDialog(QDialog):
         act_layout = QFormLayout(grp_action)
         
         self.action_type_combo = QComboBox()
-        self.action_type_combo.addItems(["STOP", "CHANGE_SPEED", "CHANGE_HEADING", "MANEUVER"])
+        self.action_type_combo.addItems(["STOP", "CHANGE_SPEED", "CHANGE_HEADING", "MANEUVER", "CHANGE_DESTINATION_LOC"])
         self.action_type_combo.currentIndexChanged.connect(self.update_action_ui)
         act_layout.addRow("Type:", self.action_type_combo)
         
@@ -81,6 +81,18 @@ class EventEditorDialog(QDialog):
         self.action_opt_combo.addItems(["ReturnToOriginalPath_ShortestDistance", "ChangeDestination_ToOriginalFinal"])
         self.action_opt_label = QLabel("Option:")
         act_layout.addRow(self.action_opt_label, self.action_opt_combo)
+        
+        self.lat_spin = QDoubleSpinBox()
+        self.lat_spin.setRange(-90, 90)
+        self.lat_spin.setDecimals(6)
+        self.lat_label = QLabel("Lat:")
+        act_layout.addRow(self.lat_label, self.lat_spin)
+        
+        self.lon_spin = QDoubleSpinBox()
+        self.lon_spin.setRange(-180, 180)
+        self.lon_spin.setDecimals(6)
+        self.lon_label = QLabel("Lon:")
+        act_layout.addRow(self.lon_label, self.lon_spin)
         
         layout.addWidget(grp_action)
         
@@ -134,6 +146,10 @@ class EventEditorDialog(QDialog):
         self.action_val_label.setVisible(False)
         self.action_opt_combo.setVisible(False)
         self.action_opt_label.setVisible(False)
+        self.lat_spin.setVisible(False)
+        self.lat_label.setVisible(False)
+        self.lon_spin.setVisible(False)
+        self.lon_label.setVisible(False)
         
         if atype == "CHANGE_SPEED":
             self.action_val_label.setText("Speed (kn):")
@@ -148,6 +164,11 @@ class EventEditorDialog(QDialog):
         elif atype == "MANEUVER":
             self.action_opt_combo.setVisible(True)
             self.action_opt_label.setVisible(True)
+        elif atype == "CHANGE_DESTINATION_LOC":
+            self.lat_spin.setVisible(True)
+            self.lat_label.setVisible(True)
+            self.lon_spin.setVisible(True)
+            self.lon_label.setVisible(True)
 
     def load_event(self):
         self.name_edit.setText(self.event.name)
@@ -176,6 +197,13 @@ class EventEditorDialog(QDialog):
         elif self.event.action_type == "MANEUVER":
             idx = self.action_opt_combo.findText(self.event.action_option)
             if idx >= 0: self.action_opt_combo.setCurrentIndex(idx)
+        elif self.event.action_type == "CHANGE_DESTINATION_LOC":
+            try:
+                lat, lon = map(float, self.event.action_option.split(","))
+                self.lat_spin.setValue(lat)
+                self.lon_spin.setValue(lon)
+            except:
+                pass
 
     def on_ok(self):
         name = self.name_edit.text().strip()
@@ -203,6 +231,8 @@ class EventEditorDialog(QDialog):
             self.event.action_value = self.action_val_spin.value()
         elif self.event.action_type == "MANEUVER":
             self.event.action_option = self.action_opt_combo.currentText()
+        elif self.event.action_type == "CHANGE_DESTINATION_LOC":
+            self.event.action_option = f"{self.lat_spin.value()},{self.lon_spin.value()}"
             
         self.accept()
 

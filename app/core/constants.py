@@ -1,6 +1,6 @@
 import logging
 
-APP_NAME = "NMEA 0183 Signal Synthesizer"
+APP_NAME = "Maritime Signal Synthesizer"
 DEFAULT_WINDOW_SIZE = (1600, 900)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

@@ -1248,8 +1248,7 @@ class SimulationPanel(QWidget):
              mi = current_project.map_info
              
              for s in current_project.ships:
-                 if not s.is_generated: continue
-                 
+                 # [수정: s.is_generated 체크 제거] 모든 선박에 대해 위치 복구
                  if s.idx in self.last_pos_dict:
                      data = self.last_pos_dict[s.idx]
                      px, py = data[0], data[1]

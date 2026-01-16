@@ -54,38 +54,56 @@ class SimulationWorker(QObject):
         self.max_steps = 0
 
     def _densify_path(self, raw_points, mi, max_segment_m=100.0):
+        """
+        제어점(Control Points) 사이를 대권(Great Circle)으로 연결하여 경로를 생성합니다.
+        """
         if not raw_points or len(raw_points) < 2:
             ecef_pts = path_points_to_ecef(raw_points, mi)
             return ecef_pts, [0.0] * len(ecef_pts), 0.0
 
         dense_ecef = []
+        
+        # 1. Pixel -> LLA 변환 (Control Points)
         lla_points = []
         for px, py in raw_points:
             _, _, lat, lon = pixel_to_coords(px, py, mi)
             lla_points.append((lat, lon))
 
+        # 2. 제어점 간 대권 보간 (Great Circle Interpolation)
         for i in range(len(lla_points) - 1):
             lat1, lon1 = lla_points[i]
             lat2, lon2 = lla_points[i+1]
+            
             x1, y1, z1 = lla_to_ecef(lat1, lon1, 0.0)
             dense_ecef.append((x1, y1, z1))
             
-            dist_m = haversine_distance(lat1, lon1, lat2, lon2)
+            # [수정] 도착점 ECEF 변환 코드 추가 (누락되었던 부분)
             x2, y2, z2 = lla_to_ecef(lat2, lon2, 0.0)
-
+            
+            # 대권 거리 계산
+            dist_m = haversine_distance(lat1, lon1, lat2, lon2)
+            
+            # 구간이 길면 잘게 쪼개어 대권상에 점을 배치
             if dist_m > max_segment_m:
                 num_steps = int(math.ceil(dist_m / max_segment_m))
                 for s in range(1, num_steps):
                     frac = s / num_steps
+                    
+                    # ECEF Slerp (지구 중심을 통과하는 현의 보간)
                     ix, iy, iz = ecef_interpolate(x1, y1, z1, x2, y2, z2, frac)
+                    
+                    # 지표면 투영 (고도 0m 보정) -> 대권상의 점이 됨
                     t_lat, t_lon, _ = ecef_to_lla(ix, iy, iz)
                     dx, dy, dz = lla_to_ecef(t_lat, t_lon, 0.0)
+                    
                     dense_ecef.append((dx, dy, dz))
         
+        # 마지막 제어점 추가
         last_lat, last_lon = lla_points[-1]
         lx, ly, lz = lla_to_ecef(last_lat, last_lon, 0.0)
         dense_ecef.append((lx, ly, lz))
         
+        # 3. 누적 거리 계산 (Rail Logic 필수)
         cumulative_dists = [0.0]
         total_len = 0.0
         for i in range(len(dense_ecef) - 1):
@@ -119,13 +137,16 @@ class SimulationWorker(QObject):
                 s_seed = (self.proj.seed + s.idx) % (2**32 - 1)
                 s_rng = random.Random(s_seed)
 
-                start_px, start_py = s.raw_points[0]
+                # 초기 위치
+                start_px, start_py = s.raw_points[0] # [수정] resampled가 아닌 raw_points 사용
                 _, _, start_lat, start_lon = pixel_to_coords(start_px, start_py, mi)
                 x, y, z = lla_to_ecef(start_lat, start_lon, 0.0)
 
+                # [수정] 제어점(raw_points) 기반으로 경로 생성 -> 대권 항로 보장
                 points = s.raw_points 
                 ecef_path, cum_dists, total_len = self._densify_path(points, mi)
 
+                # 초기 Heading 설정
                 init_hdg = 0.0
                 if len(ecef_path) > 1:
                     tx, ty, tz = ecef_path[1]
@@ -136,17 +157,20 @@ class SimulationWorker(QObject):
                     'spd': s.raw_speeds.get(0, 5.0),
                     'sog': s.raw_speeds.get(0, 5.0),
                     'hdg': init_hdg,
+                    
                     'dist_traveled': 0.0,      
                     'path_segment_idx': 0,     
                     'ecef_path': ecef_path,
                     'cum_dists': cum_dists,    
                     'total_path_len': total_len,
+                    
                     'following_path': True,
                     'manual_speed': False,
                     'manual_heading': False,
                     'mode': None,              
                     'rng': s_rng,
-                    'target_recovery_idx': -1
+                    'target_recovery_idx': -1,
+                    'target_dest_ecef': None
                 }
             
             self.events = [e for e in self.proj.events if e.enabled]
@@ -173,6 +197,7 @@ class SimulationWorker(QObject):
                       time.sleep(0.1)
                       continue
 
+                # Refresh events logic
                 try:
                     active_events = [e for e in self.proj.events if e.enabled]
                     from app.core.state import loaded_scenarios
@@ -262,7 +287,7 @@ class SimulationWorker(QObject):
         for s in new_ships:
             s_seed = (self.proj.seed + s.idx) % (2**32 - 1)
             s_rng = random.Random(s_seed)
-            points = s.raw_points
+            points = s.raw_points # [수정] raw_points 사용
             if not points: continue
             
             ecef_path, cum_dists, total_len = self._densify_path(points, mi)
@@ -288,7 +313,8 @@ class SimulationWorker(QObject):
                 'manual_heading': False,
                 'mode': None,
                 'rng': s_rng,
-                'target_recovery_idx': -1
+                'target_recovery_idx': -1,
+                'target_dest_ecef': None
             }
             self.active_ships.append(s)
 
@@ -337,6 +363,42 @@ class SimulationWorker(QObject):
             ship = self.proj.get_ship_by_idx(ship_idx)
             self.log_message.emit(f"[Manual] Heading changed for {ship.name if ship else ship_idx} to {heading_deg} deg")
 
+    def _calculate_ecef_velocity(self, lat, lon, spd_kn, hdg_deg):
+        spd_mps = spd_kn * 0.514444
+        lat_rad = math.radians(lat)
+        lon_rad = math.radians(lon)
+        hdg_rad = math.radians(hdg_deg)
+        
+        # Local NED unit vectors in ECEF
+        # North
+        n_x = -math.sin(lat_rad) * math.cos(lon_rad)
+        n_y = -math.sin(lat_rad) * math.sin(lon_rad)
+        n_z = math.cos(lat_rad)
+        
+        # East
+        e_x = -math.sin(lon_rad)
+        e_y = math.cos(lon_rad)
+        e_z = 0.0
+        
+        # Heading vector composition
+        v_x = (n_x * math.cos(hdg_rad) + e_x * math.sin(hdg_rad)) * spd_mps
+        v_y = (n_y * math.cos(hdg_rad) + e_y * math.sin(hdg_rad)) * spd_mps
+        v_z = (n_z * math.cos(hdg_rad) + e_z * math.sin(hdg_rad)) * spd_mps
+        
+        return v_x, v_y, v_z
+
+    def _ecef_dist_to_geodesic_nm(self, d_ecef):
+        # ECEF Chord length -> Geodesic Arc length conversion
+        R = 6371000.0
+        if d_ecef >= 2 * R: return math.pi * R / 1852.0
+        
+        val = d_ecef / (2.0 * R)
+        if val > 1.0: val = 1.0
+        theta = 2.0 * math.asin(val)
+        
+        dist_m = R * theta
+        return dist_m / 1852.0
+
     def check_events(self, t_current):
         for evt in self.events:
             if evt.id in self.triggered_events: continue
@@ -371,11 +433,51 @@ class SimulationWorker(QObject):
                 if tgt_ship and ref_ship and tgt_ship.idx in self.dynamic_ships and ref_ship.idx in self.dynamic_ships:
                     td = self.dynamic_ships[tgt_ship.idx]
                     rd = self.dynamic_ships[ref_ship.idx]
-                    dist_m = ecef_distance(td['x'], td['y'], td['z'], rd['x'], rd['y'], rd['z'])
-                    val_compare = dist_m / 1852.0
                     
-                    if evt.trigger_type == "DIST_UNDER" and val_compare <= evt.condition_value: triggered = True
-                    elif evt.trigger_type == "DIST_OVER" and val_compare >= evt.condition_value: triggered = True
+                    # 1. Current Distance (Chord -> Arc)
+                    dist_chord_m = ecef_distance(td['x'], td['y'], td['z'], rd['x'], rd['y'], rd['z'])
+                    dist_nm = self._ecef_dist_to_geodesic_nm(dist_chord_m)
+                    
+                    if evt.trigger_type == "DIST_UNDER" and dist_nm <= evt.condition_value: triggered = True
+                    elif evt.trigger_type == "DIST_OVER" and dist_nm >= evt.condition_value: triggered = True
+                    elif evt.trigger_type in ["CPA_UNDER", "CPA_OVER"]:
+                        # CPA Logic with Geodesic consideration
+                        # Step A: Estimate T_CPA using vector algebra (valid for finding time)
+                        t_lat, t_lon, _ = ecef_to_lla(td['x'], td['y'], td['z'])
+                        r_lat, r_lon, _ = ecef_to_lla(rd['x'], rd['y'], rd['z'])
+                        
+                        tvx, tvy, tvz = self._calculate_ecef_velocity(t_lat, t_lon, td.get('sog', td['spd']), td['hdg'])
+                        rvx, rvy, rvz = self._calculate_ecef_velocity(r_lat, r_lon, rd.get('sog', rd['spd']), rd['hdg'])
+                        
+                        px, py, pz = td['x'] - rd['x'], td['y'] - rd['y'], td['z'] - rd['z']
+                        vx, vy, vz = tvx - rvx, tvy - rvy, tvz - rvz
+                        
+                        v_sq = vx*vx + vy*vy + vz*vz
+                        cpa_dist_nm = dist_nm # Default to current
+                        
+                        if v_sq > 1e-9:
+                            t_cpa = -(px*vx + py*vy + pz*vz) / v_sq
+                            if t_cpa > 0:
+                                # Step B: Simulate position at T_CPA using Great Circle Move (Correcting for Earth curve)
+                                t_sog = td.get('sog', td['spd'])
+                                r_sog = rd.get('sog', rd['spd'])
+                                
+                                # Move Target
+                                t_move_m = t_sog * 1852.0 * (t_cpa / 3600.0)
+                                t_new_lat, t_new_lon, _ = self._move_great_circle_step(t_lat, t_lon, td['hdg'], t_move_m)
+                                tx_new, ty_new, tz_new = lla_to_ecef(t_new_lat, t_new_lon, 0.0)
+                                
+                                # Move Ref
+                                r_move_m = r_sog * 1852.0 * (t_cpa / 3600.0)
+                                r_new_lat, r_new_lon, _ = self._move_great_circle_step(r_lat, r_lon, rd['hdg'], r_move_m)
+                                rx_new, ry_new, rz_new = lla_to_ecef(r_new_lat, r_new_lon, 0.0)
+                                
+                                # Step C: Measure Distance at predicted positions (Chord -> Arc)
+                                future_dist_chord = ecef_distance(tx_new, ty_new, tz_new, rx_new, ry_new, rz_new)
+                                cpa_dist_nm = self._ecef_dist_to_geodesic_nm(future_dist_chord)
+                        
+                        if evt.trigger_type == "CPA_UNDER" and cpa_dist_nm <= evt.condition_value: triggered = True
+                        elif evt.trigger_type == "CPA_OVER" and cpa_dist_nm >= evt.condition_value: triggered = True
 
             if triggered:
                 self.log_message.emit(f"[EVENT] {evt.name} triggered.")
@@ -398,6 +500,18 @@ class SimulationWorker(QObject):
             dyn['hdg'] = evt.action_value
             dyn['manual_heading'] = True
             dyn['following_path'] = False
+        elif evt.action_type == "CHANGE_DESTINATION_LOC":
+            try:
+                lat, lon = map(float, evt.action_option.split(","))
+                tx, ty, tz = lla_to_ecef(lat, lon, 0.0)
+                dyn['target_dest_ecef'] = (tx, ty, tz)
+                
+                dyn['following_path'] = False
+                dyn['mode'] = 'GO_TO_COORD'
+                dyn['hdg'] = ecef_heading(dyn['x'], dyn['y'], dyn['z'], tx, ty, tz)
+            except:
+                self.log_message.emit(f"[Error] Invalid coords for event {evt.name}")
+
         elif evt.action_type == "MANEUVER":
             opt = getattr(evt, 'action_option', "")
             if opt == "ReturnToOriginalPath_ShortestDistance":
@@ -406,6 +520,7 @@ class SimulationWorker(QObject):
                     cx, cy, cz = dyn['x'], dyn['y'], dyn['z']
                     best_idx = 0
                     best_dist = float('inf')
+                    # One-time search at trigger
                     for i in range(len(ecef_path)):
                         px, py, pz = ecef_path[i]
                         d = ecef_distance(cx, cy, cz, px, py, pz)
@@ -425,12 +540,15 @@ class SimulationWorker(QObject):
                     dyn['manual_heading'] = True 
 
     def update_and_get_state(self, ship, dT):
+        # [수정] 동적 상태 초기화 로직 강화: 이미 존재하면 절대 초기화하지 않음
+        # 이로 인해 이벤트나 다른 로직으로 인해 dist_traveled가 0으로 리셋되는 문제 방지
         if ship.idx not in self.dynamic_ships:
             mi = self.proj.map_info
-            if ship.raw_points:
+            if ship.raw_points: # raw_points 사용
                 px, py = ship.raw_points[0]
                 _, _, lat, lon = pixel_to_coords(px, py, mi)
                 x, y, z = lla_to_ecef(lat, lon, 0.0)
+                # raw_points 기반 대권 경로 생성
                 ecef_path, cum_dists, total_len = self._densify_path(ship.raw_points, mi)
             else:
                 x, y, z = lla_to_ecef(0, 0, 0.0)
@@ -443,7 +561,8 @@ class SimulationWorker(QObject):
                 'ecef_path': ecef_path, 'cum_dists': cum_dists, 'total_path_len': total_len,
                 'following_path': True, 'manual_speed': False, 'manual_heading': False,
                 'mode': None, 'rng': random.Random(),
-                'target_recovery_idx': -1
+                'target_recovery_idx': -1,
+                'target_dest_ecef': None
             }
 
         dyn = self.dynamic_ships[ship.idx]
@@ -451,6 +570,7 @@ class SimulationWorker(QObject):
         cum_dists = dyn.get('cum_dists', [])
         total_len = dyn.get('total_path_len', 0.0)
 
+        # 1. 속도 계산
         variance = getattr(self.proj.settings, "speed_variance", 1.0)
         sigma = math.sqrt(variance)
         noise = dyn['rng'].gauss(0, sigma)
@@ -465,10 +585,31 @@ class SimulationWorker(QObject):
             
         move_dist_m = current_speed_kn * 1852.0 * (dT / 3600.0)
         
+        # GO_TO_COORD Mode
+        if dyn.get('mode') == 'GO_TO_COORD' and dyn.get('target_dest_ecef'):
+            tx, ty, tz = dyn['target_dest_ecef']
+            curr_dist = ecef_distance(dyn['x'], dyn['y'], dyn['z'], tx, ty, tz)
+            
+            if curr_dist <= move_dist_m:
+                dyn['x'], dyn['y'], dyn['z'] = tx, ty, tz
+                dyn['spd'] = 0.0
+                dyn['sog'] = 0.0
+                dyn['mode'] = None
+            else:
+                target_hdg = ecef_heading(dyn['x'], dyn['y'], dyn['z'], tx, ty, tz)
+                lat, lon, _ = ecef_to_lla(dyn['x'], dyn['y'], dyn['z'])
+                nlat, nlon, nhdg = self._move_great_circle_step(lat, lon, target_hdg, move_dist_m)
+                
+                dyn['x'], dyn['y'], dyn['z'] = lla_to_ecef(nlat, nlon, 0.0)
+                dyn['hdg'] = nhdg
+                
+            return self._make_state_result(0,0,0,0) if dyn['spd']==0 else \
+                   self._make_state_result(*ecef_to_lla(dyn['x'], dyn['y'], dyn['z'])[:2], current_speed_kn, dyn['hdg'])
+
+        # RETURN_TO_PATH Mode
         if dyn.get('mode') == 'RETURN_TO_PATH' and ecef_path:
             best_idx = dyn.get('target_recovery_idx', 0)
-            if best_idx < 0 or best_idx >= len(ecef_path):
-                 best_idx = 0 
+            if best_idx < 0 or best_idx >= len(ecef_path): best_idx = 0 
             
             px, py, pz = ecef_path[best_idx]
             curr_dist = ecef_distance(dyn['x'], dyn['y'], dyn['z'], px, py, pz)
@@ -491,6 +632,7 @@ class SimulationWorker(QObject):
                 
                 return self._make_state_result(nlat, nlon, current_speed_kn, nhdg)
 
+        # 3. 이동 로직: Rail vs Vector
         active_rail = False
         if dyn.get('following_path') and ecef_path:
             if dyn['dist_traveled'] + move_dist_m <= total_len:
@@ -500,6 +642,7 @@ class SimulationWorker(QObject):
                 active_rail = False
 
         if active_rail:
+            # --- RAIL MODE (대권 추종) ---
             dyn['dist_traveled'] += move_dist_m
             curr_d = dyn['dist_traveled']
             
@@ -515,17 +658,24 @@ class SimulationWorker(QObject):
             x1, y1, z1 = ecef_path[idx]
             x2, y2, z2 = ecef_path[idx+1]
             
+            # [위치 업데이트] 대권 보간 위치
             dyn['x'], dyn['y'], dyn['z'] = ecef_interpolate(x1, y1, z1, x2, y2, z2, frac)
+            
+            # [핵심 수정: 헤딩 업데이트] "항상 언제나 매 순간 바뀌어야 함"
+            # 현재 위치(dyn)에서 다음 미세 경로점(x2, y2, z2)을 향하는 대권 방위각 계산
             dyn['hdg'] = ecef_heading(dyn['x'], dyn['y'], dyn['z'], x2, y2, z2)
             
         else:
+            # --- VECTOR MODE (대권 자유 항해) ---
             if move_dist_m > 0:
                 lat, lon, _ = ecef_to_lla(dyn['x'], dyn['y'], dyn['z'])
+                # 현재 헤딩으로 대권 이동 -> 위치 이동에 따라 헤딩도 자동 변경됨
                 nlat, nlon, nhdg = self._move_great_circle_step(lat, lon, dyn['hdg'], move_dist_m)
                 
                 dyn['x'], dyn['y'], dyn['z'] = lla_to_ecef(nlat, nlon, 0.0)
                 dyn['hdg'] = nhdg
 
+        # 4. 결과 반환
         lat, lon, _ = ecef_to_lla(dyn['x'], dyn['y'], dyn['z'])
         
         if lat > 89.9: lat = 89.9
@@ -535,6 +685,10 @@ class SimulationWorker(QObject):
         return self._make_state_result(lat, lon, current_speed_kn, dyn['hdg'])
 
     def _move_great_circle_step(self, lat, lon, hdg_deg, dist_m):
+        """
+        현재 위치에서 대권 항해(Great Circle Sailing)로 이동 후 
+        새 위치와 해당 지점에서의 방위각(Bearing)을 반환합니다.
+        """
         lat_rad = math.radians(lat)
         lon_rad = math.radians(lon)
         hdg_rad = math.radians(hdg_deg)
@@ -555,6 +709,7 @@ class SimulationWorker(QObject):
         new_lat = math.degrees(new_lat_rad)
         new_lon = normalize_lon(math.degrees(new_lon_rad))
 
+        # New Heading (Final Bearing + 180 strategy)
         y = math.sin(lon_rad - new_lon_rad) * math.cos(lat_rad)
         x = math.cos(new_lat_rad) * math.sin(lat_rad) - \
             math.sin(new_lat_rad) * math.cos(lat_rad) * math.cos(lon_rad - new_lon_rad)
