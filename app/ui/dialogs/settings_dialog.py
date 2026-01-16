@@ -355,20 +355,11 @@ class SettingsDialog(QDialog):
         w = QWidget()
         l = QFormLayout(w)
         
-        self.chk_zigzag = QCheckBox()
-        self.chk_zigzag.setChecked(current_project.settings.rtg_zigzag_enabled)
-        l.addRow("Enable RTG Zigzag Maneuver:", self.chk_zigzag)
-        
-        self.spin_zigzag_turns = QSpinBox()
-        self.spin_zigzag_turns.setRange(1, 10)
-        self.spin_zigzag_turns.setValue(current_project.settings.rtg_zigzag_turns)
-        l.addRow("RTG Zigzag Turns (Expected Value):", self.spin_zigzag_turns)
-        
-        self.spin_zigzag_angle = QDoubleSpinBox()
-        self.spin_zigzag_angle.setRange(0, 180)
-        self.spin_zigzag_angle.setValue(current_project.settings.rtg_zigzag_angle_limit)
-        self.spin_zigzag_angle.setSuffix(" deg")
-        l.addRow("RTG Zigzag Angle Limit (+/-):", self.spin_zigzag_angle)
+        # [수정] 지그재그 관련 설정(Enable Zigzag, Turns, Angle Limit) UI 제거
+        # 빈 화면 대신 안내 문구 추가
+        label = QLabel("No simulation specific settings currently.")
+        label.setStyleSheet("color: gray; font-style: italic;")
+        l.addRow(label)
         
         self.stack.addWidget(w)
 
@@ -442,7 +433,7 @@ class SettingsDialog(QDialog):
                     obj.name = new_name
             elif obj_type == "Area":
                 obj = current_project.get_area_by_id(obj_id)
-                # Area name update if needed, but currently read-only in table logic above for non-ships
+                # Area name update if needed
 
         current_project.settings.show_speed_notes = self.chk_speed_notes.isChecked()
         current_project.settings.theme_mode = self.combo_theme.currentText()
@@ -456,6 +447,4 @@ class SettingsDialog(QDialog):
         for i, s in enumerate(self.ais_frag_spins):
             current_project.settings.ais_fragment_probs[i] = s.value()
             
-        current_project.settings.rtg_zigzag_enabled = self.chk_zigzag.isChecked()
-        current_project.settings.rtg_zigzag_turns = self.spin_zigzag_turns.value()
-        current_project.settings.rtg_zigzag_angle_limit = self.spin_zigzag_angle.value()
+        # [수정] 지그재그 관련 설정 저장 로직 삭제됨 (UI가 없으므로 값도 읽어올 수 없음)

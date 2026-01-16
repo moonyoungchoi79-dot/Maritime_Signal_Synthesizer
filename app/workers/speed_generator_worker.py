@@ -7,7 +7,7 @@ from scipy.interpolate import interp1d, PchipInterpolator
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from app.core.models.project import current_project
-from app.core.geometry import haversine_distance, resample_polyline_numpy, pixel_to_coords
+from app.core.geometry import vincenty_distance, resample_polyline_numpy, pixel_to_coords
 
 class SpeedGeneratorWorker(QObject):
     finished = pyqtSignal(int)
@@ -50,7 +50,7 @@ class SpeedGeneratorWorker(QObject):
                 dists_m = [0.0]
                 current_dist = 0.0
                 for i in range(1, len(lats)):
-                    d = haversine_distance(lats[i-1], lons[i-1], lats[i], lons[i])
+                    d = vincenty_distance(lats[i-1], lons[i-1], lats[i], lons[i])
                     current_dist += d
                     dists_m.append(current_dist)
                 
