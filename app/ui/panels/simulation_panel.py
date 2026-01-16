@@ -504,6 +504,38 @@ class SimulationPanel(QWidget):
         self.update_follow_combo()
         self.update_control_combo()
 
+    def _move_great_circle_step(self, lat, lon, hdg_deg, dist_m):
+        lat_rad = math.radians(lat)
+        lon_rad = math.radians(lon)
+        hdg_rad = math.radians(hdg_deg)
+        R = 6371000.0 # Earth Radius
+
+        ang_dist = dist_m / R
+
+        new_lat_rad = math.asin(
+            math.sin(lat_rad) * math.cos(ang_dist) +
+            math.cos(lat_rad) * math.sin(ang_dist) * math.cos(hdg_rad)
+        )
+        
+        new_lon_rad = lon_rad + math.atan2(
+            math.sin(hdg_rad) * math.sin(ang_dist) * math.cos(lat_rad),
+            math.cos(ang_dist) - math.sin(lat_rad) * math.sin(new_lat_rad)
+        )
+        
+        new_lat = math.degrees(new_lat_rad)
+        new_lon = normalize_lon(math.degrees(new_lon_rad))
+
+        y = math.sin(lon_rad - new_lon_rad) * math.cos(lat_rad)
+        x = math.cos(new_lat_rad) * math.sin(lat_rad) - \
+            math.sin(new_lat_rad) * math.cos(lat_rad) * math.cos(lon_rad - new_lon_rad)
+        
+        back_bearing_rad = math.atan2(y, x)
+        back_bearing_deg = math.degrees(back_bearing_rad)
+        
+        new_hdg = (back_bearing_deg + 180) % 360
+        
+        return new_lat, new_lon, new_hdg
+
     def generate_random_targets_logic(self, own_ship, R_nm, N_ai, N_ra, N_both, area_id=-1):
         seed_val = (current_project.seed + len(current_project.ships)) % (2**32 - 1)
         random.seed(seed_val)
@@ -544,6 +576,7 @@ class SimulationPanel(QWidget):
             elif i < N_ai + N_ra: s_type = "RA"
             else: s_type = "BOTH"
             
+            # Start Position Generation
             if target_area_poly:
                 found = False
                 for _ in range(200):
@@ -570,6 +603,7 @@ class SimulationPanel(QWidget):
             
             start_lat = max(-89.9, min(89.9, start_lat))
             
+            # Speed and Heading
             variance = current_project.settings.speed_variance
             sigma = math.sqrt(variance)
             spd = abs(random.gauss(own_spd_kn, sigma)) 
@@ -577,65 +611,34 @@ class SimulationPanel(QWidget):
             
             heading = random.random() * 360.0
             
+            # [수정됨] 지그재그 로직 제거 -> 전체 지속 시간 동안 직진
             duration_remaining = 24 * 3600.0 
             
-            use_zigzag = current_project.settings.rtg_zigzag_enabled
-            max_turns = current_project.settings.rtg_zigzag_turns
-            angle_limit = current_project.settings.rtg_zigzag_angle_limit
-            
-            segments = []
-            if use_zigzag:
-                n_turns = random.randint(1, max_turns)
-                cut_points = sorted([random.random() for _ in range(n_turns)])
-                cut_points = [0.0] + cut_points + [1.0]
-                for k in range(len(cut_points)-1):
-                    dur = (cut_points[k+1] - cut_points[k]) * duration_remaining
-                    segments.append(dur)
-            else:
-                segments.append(duration_remaining)
-            
+            # --- Path Generation (Great Circle) ---
             curr_lat, curr_lon = start_lat, start_lon
             curr_heading = heading
             
             px_start, py_start = coords_to_pixel(start_lat, start_lon, mi)
             raw_pixels = [(px_start, py_start)]
             
-            for k, seg_dur in enumerate(segments):
-                dist_nm = spd * (seg_dur / 3600.0)
-                dist_deg = dist_nm / 60.0
-                
-                end_lat_seg = curr_lat + dist_deg * math.cos(math.radians(curr_heading))
-                
-                ratio = 1.0
-                hit_boundary = False
-                if end_lat_seg > 90:
-                    ratio = (90 - curr_lat) / (end_lat_seg - curr_lat) if end_lat_seg != curr_lat else 0
-                    end_lat_seg = 90
-                    hit_boundary = True
-                elif end_lat_seg < -90:
-                    ratio = (-90 - curr_lat) / (end_lat_seg - curr_lat) if end_lat_seg != curr_lat else 0
-                    end_lat_seg = -90
-                    hit_boundary = True
-                
-                actual_dist_deg = dist_deg * ratio
-                mid_lat = (curr_lat + end_lat_seg) / 2.0
-                cos_mid = math.cos(math.radians(mid_lat))
-                if abs(cos_mid) < 0.01: cos_mid = 0.01
-                
-                end_lon_seg = curr_lon + (actual_dist_deg * math.sin(math.radians(curr_heading)) / cos_mid)
-                
-                px, py = coords_to_pixel(end_lat_seg, end_lon_seg, mi)
-                raw_pixels.append((px, py))
-                
-                curr_lat = end_lat_seg
-                curr_lon = end_lon_seg
-                
-                if hit_boundary: break
-                
-                if k < len(segments) - 1:
-                    change = random.uniform(-angle_limit, angle_limit)
-                    curr_heading = (curr_heading + change) % 360.0
+            dt = 60.0 # 60 seconds step for smooth curve visualization
+            spd_mps = spd * 0.514444 # Knots to m/s
+
+            # 단일 세그먼트로 처리 (직선 이동)
+            steps = int(duration_remaining / dt)
+            if steps < 1: steps = 1
+            dist_step = spd_mps * dt
             
+            for _ in range(steps):
+                curr_lat, curr_lon, curr_heading = self._move_great_circle_step(curr_lat, curr_lon, curr_heading, dist_step)
+                
+                if curr_lat > 89.9: curr_lat = 89.9
+                elif curr_lat < -89.9: curr_lat = -89.9
+                
+                px, py = coords_to_pixel(curr_lat, curr_lon, mi)
+                raw_pixels.append((px, py))
+            
+            # Create Ship Object
             new_idx = 1001
             existing_idxs = {s.idx for s in current_project.ships}
             while new_idx in existing_idxs: new_idx += 1
@@ -1016,6 +1019,13 @@ class SimulationPanel(QWidget):
 
     def on_control_ship_changed(self):
         idx = self.combo_control_ship.currentData()
+        
+        # [동기화 로직 추가] 콤보박스에서 선박 선택 시 맵의 하이라이트도 같이 업데이트
+        # 선택된 인덱스가 없으면 하이라이트 해제(-1)
+        self.highlighted_ship_idx = idx if idx is not None else -1
+        # 변경 사항을 반영하기 위해 맵 다시 그리기
+        self.draw_static_map()
+
         if idx is None: return
         
         ship = current_project.get_ship_by_idx(idx)
@@ -1083,10 +1093,11 @@ class SimulationPanel(QWidget):
              if not ship.raw_points: continue 
              
              is_own = (ship.idx == current_project.settings.own_ship_idx)
+             is_random = (ship.idx >= 1000) # 랜덤 타겟 여부 확인
              
              if is_own:
                  c_hex = current_project.settings.own_color
-             elif ship.idx >= 1000:
+             elif is_random:
                  c_hex = current_project.settings.random_color
              else:
                  c_hex = current_project.settings.target_color
@@ -1110,7 +1121,9 @@ class SimulationPanel(QWidget):
              pen.setStyle(Qt.PenStyle.CustomDashLine)
              pen.setDashPattern([1, 4])
              path.setPen(pen)
-             if self.chk_show_paths.isChecked():
+             
+             # [수정] 랜덤 타겟이 아닐 때만 점선 경로(Planned Path) 표시
+             if self.chk_show_paths.isChecked() and not is_random:
                  self.scene.addItem(path)
              self.planned_paths[ship.idx] = path
              
@@ -1154,7 +1167,7 @@ class SimulationPanel(QWidget):
                      QPointF(ai_s / 2, ai_h / 3)
                  ])
                  
-                 ind_color = QColor(current_project.settings.random_color) if ship.idx >= 1000 else QColor(current_project.settings.target_color)
+                 ind_color = QColor(current_project.settings.random_color) if is_random else QColor(current_project.settings.target_color)
                  
                  ai_indicator = QGraphicsPolygonItem(ai_poly)
                  ai_pen = QPen(ind_color, 1.5)
@@ -1201,7 +1214,8 @@ class SimulationPanel(QWidget):
                  tf.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
                  tf.setZValue(3)
 
-                 if self.chk_show_paths.isChecked():
+                 # [수정] 랜덤 타겟이 아닐 때만 i, f 마커 표시
+                 if self.chk_show_paths.isChecked() and not is_random:
                      self.scene.addItem(ti)
                      self.scene.addItem(tf)
 
@@ -1248,7 +1262,6 @@ class SimulationPanel(QWidget):
              mi = current_project.map_info
              
              for s in current_project.ships:
-                 # [수정: s.is_generated 체크 제거] 모든 선박에 대해 위치 복구
                  if s.idx in self.last_pos_dict:
                      data = self.last_pos_dict[s.idx]
                      px, py = data[0], data[1]
