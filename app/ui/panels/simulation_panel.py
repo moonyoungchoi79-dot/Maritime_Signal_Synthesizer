@@ -83,11 +83,13 @@ class TargetInfoDialog(QDialog):
         if self.worker and self.worker.running:
             t_now = self.worker.current_time
             
-        # Get dynamic state if available
+        # Get dynamic state if available (convert ECEF to LLA)
         state = {'lat':0, 'lon':0, 'spd':0, 'hdg':0}
         if self.worker and self.ship_idx in self.worker.dynamic_ships:
             dyn = self.worker.dynamic_ships[self.ship_idx]
-            state = {'lat': dyn['lat'], 'lon': dyn['lon'], 'spd': dyn.get('sog', dyn['spd']), 'hdg': dyn['hdg']}
+            from app.core.geometry import ecef_to_lla
+            lat, lon, _ = ecef_to_lla(dyn['x'], dyn['y'], dyn['z'])
+            state = {'lat': lat, 'lon': lon, 'spd': dyn.get('sog', dyn['spd']), 'hdg': dyn['hdg']}
         elif self.parent().calculate_ship_state:
             state = self.parent().calculate_ship_state(ship, t_now)
             
@@ -540,11 +542,14 @@ class SimulationPanel(QWidget):
         own_lat, own_lon, own_spd_kn = 0.0, 0.0, 0.0
         
         mi = current_project.map_info
-        
+
         # Use current dynamic state if available, otherwise start pos
         if self.worker and self.worker.running and own_ship.idx in self.worker.dynamic_ships:
             dyn = self.worker.dynamic_ships[own_ship.idx]
-            own_lat, own_lon, own_spd_kn = dyn['lat'], dyn['lon'], dyn['spd']
+            # Convert ECEF to LLA
+            from app.core.geometry import ecef_to_lla
+            own_lat, own_lon, _ = ecef_to_lla(dyn['x'], dyn['y'], dyn['z'])
+            own_spd_kn = dyn['spd']
         elif own_ship.resampled_points:
             px, py = own_ship.resampled_points[0]
             _, _, own_lat, own_lon = pixel_to_coords(px, py, mi)
@@ -1890,10 +1895,12 @@ class SimulationPanel(QWidget):
         self.stop_all_blinks()
 
     def calculate_ship_state(self, ship, t_current):
-        # If worker is running, return dynamic state
+        # If worker is running, return dynamic state (convert ECEF to LLA)
         if self.worker and ship.idx in self.worker.dynamic_ships:
             dyn = self.worker.dynamic_ships[ship.idx]
-            return {'lat': dyn['lat'], 'lon': dyn['lon'], 'spd': dyn.get('sog', dyn['spd']), 'hdg': dyn['hdg']}
+            from app.core.geometry import ecef_to_lla
+            lat, lon, _ = ecef_to_lla(dyn['x'], dyn['y'], dyn['z'])
+            return {'lat': lat, 'lon': lon, 'spd': dyn.get('sog', dyn['spd']), 'hdg': dyn['hdg']}
 
         # If not running, return start position
         mi = current_project.map_info

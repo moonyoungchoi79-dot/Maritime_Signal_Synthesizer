@@ -269,7 +269,10 @@ class SimulationWindow(QWidget):
         # Use current dynamic state if available, otherwise start pos
         if self.worker and self.worker.running and own_ship.idx in self.worker.dynamic_ships:
             dyn = self.worker.dynamic_ships[own_ship.idx]
-            own_lat, own_lon, own_spd_kn = dyn['lat'], dyn['lon'], dyn['spd']
+            # Convert ECEF to LLA
+            from app.core.geometry import ecef_to_lla
+            own_lat, own_lon, _ = ecef_to_lla(dyn['x'], dyn['y'], dyn['z'])
+            own_spd_kn = dyn['spd']
         elif own_ship.resampled_points:
             px, py = own_ship.resampled_points[0]
             _, _, own_lat, own_lon = pixel_to_coords(px, py, mi)
@@ -335,45 +338,42 @@ class SimulationWindow(QWidget):
             else:
                 segments.append(duration_remaining)
             
-            raw_points_geo = [] # (lat, lon)
+            # REVERTED OPTIMIZATION: Use dense points for accuracy
+            # We generate points every 1 second to ensure the ship follows the path exactly
+            # even at high simulation speeds (e.g. 10000x), preventing deviation and heading mismatch.
+            
+            raw_pixels = []
             curr_lat, curr_lon = start_lat, start_lon
             curr_heading = heading
             
             px_start, py_start = coords_to_pixel(start_lat, start_lon, mi)
-            raw_pixels = [(px_start, py_start)]
+            raw_pixels.append((px_start, py_start))
+            
+            dt = 1.0 # 1 second interval
             
             for k, seg_dur in enumerate(segments):
-                dist_nm = spd * (seg_dur / 3600.0)
-                dist_deg = dist_nm / 60.0
+                steps = int(seg_dur / dt)
                 
-                end_lat_seg = curr_lat + dist_deg * math.cos(math.radians(curr_heading))
+                # Velocity components (knots -> deg/sec)
+                # 1 knot = 1 nm/h = 1/60 deg_lat/h
+                dist_per_sec_deg = (spd / 3600.0) / 60.0
                 
-                # Boundary check
-                ratio = 1.0
-                hit_boundary = False
-                if end_lat_seg > 90:
-                    ratio = (90 - curr_lat) / (end_lat_seg - curr_lat) if end_lat_seg != curr_lat else 0
-                    end_lat_seg = 90
-                    hit_boundary = True
-                elif end_lat_seg < -90:
-                    ratio = (-90 - curr_lat) / (end_lat_seg - curr_lat) if end_lat_seg != curr_lat else 0
-                    end_lat_seg = -90
-                    hit_boundary = True
+                d_lat_step = dist_per_sec_deg * math.cos(math.radians(curr_heading)) * dt
+                d_lon_step_base = dist_per_sec_deg * math.sin(math.radians(curr_heading)) * dt
                 
-                actual_dist_deg = dist_deg * ratio
-                mid_lat = (curr_lat + end_lat_seg) / 2.0
-                cos_mid = math.cos(math.radians(mid_lat))
-                if abs(cos_mid) < 0.01: cos_mid = 0.01
-                
-                end_lon_seg = curr_lon + (actual_dist_deg * math.sin(math.radians(curr_heading)) / cos_mid)
-                
-                px, py = coords_to_pixel(end_lat_seg, end_lon_seg, mi)
-                raw_pixels.append((px, py))
-                
-                curr_lat = end_lat_seg
-                curr_lon = end_lon_seg
-                
-                if hit_boundary: break
+                for _ in range(steps):
+                    curr_lat += d_lat_step
+                    if curr_lat > 89.9: curr_lat = 89.9
+                    elif curr_lat < -89.9: curr_lat = -89.9
+                    
+                    cos_lat = math.cos(math.radians(curr_lat))
+                    if abs(cos_lat) < 0.01: cos_lat = 0.01
+                    
+                    d_lon_step = d_lon_step_base / cos_lat
+                    curr_lon += d_lon_step
+                    
+                    px, py = coords_to_pixel(curr_lat, curr_lon, mi)
+                    raw_pixels.append((px, py))
                 
                 # Change heading for next segment
                 if k < len(segments) - 1:
@@ -399,9 +399,7 @@ class SimulationWindow(QWidget):
             new_ship.raw_points = raw_pixels
             new_ship.raw_speeds = {0: spd}
             
-            # 2. Populate Simulation Data (Essential for Immediate Visualization)
-            # Optimized: Use waypoints directly instead of dense resampling.
-            # The simulation worker interpolates linearly between these points.
+            # 2. Populate Simulation Data
             new_ship.resampled_points = raw_pixels
             
             # Set Signals
@@ -1167,10 +1165,12 @@ class SimulationWindow(QWidget):
                 self.worker_thread.deleteLater()
 
     def calculate_ship_state(self, ship, t_current):
-        # If worker is running, return dynamic state
+        # If worker is running, return dynamic state (convert ECEF to LLA)
         if self.worker and ship.idx in self.worker.dynamic_ships:
             dyn = self.worker.dynamic_ships[ship.idx]
-            return {'lat': dyn['lat'], 'lon': dyn['lon'], 'spd': dyn['spd'], 'hdg': dyn['hdg']}
+            from app.core.geometry import ecef_to_lla
+            lat, lon, _ = ecef_to_lla(dyn['x'], dyn['y'], dyn['z'])
+            return {'lat': lat, 'lon': lon, 'spd': dyn['spd'], 'hdg': dyn['hdg']}
 
         # If not running, return start position
         mi = current_project.map_info

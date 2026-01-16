@@ -53,6 +53,54 @@ class SimulationWorker(QObject):
         self.events = []
         self.max_steps = 0
 
+    def _densify_path(self, raw_points, mi, max_segment_m=100.0):
+        """
+        Resamples the path into dense ECEF points to approximate Great Circle movement.
+        max_segment_m: Maximum distance between points in meters (default 100m)
+        """
+        if not raw_points or len(raw_points) < 2:
+            return path_points_to_ecef(raw_points, mi)
+
+        dense_ecef = []
+        
+        # Convert raw pixels to LLA first
+        lla_points = []
+        for px, py in raw_points:
+            _, _, lat, lon = pixel_to_coords(px, py, mi)
+            lla_points.append((lat, lon))
+
+        # Iterate segments and densify
+        for i in range(len(lla_points) - 1):
+            lat1, lon1 = lla_points[i]
+            lat2, lon2 = lla_points[i+1]
+            
+            # Start point ECEF
+            x1, y1, z1 = lla_to_ecef(lat1, lon1, 0.0)
+            dense_ecef.append((x1, y1, z1))
+            
+            # Calculate distance
+            dist_m = haversine_distance(lat1, lon1, lat2, lon2)
+            
+            if dist_m > max_segment_m:
+                num_steps = int(math.ceil(dist_m / max_segment_m))
+                
+                for s in range(1, num_steps):
+                    frac = s / num_steps
+                    # Simple linear interpolation of lat/lon avoids the "underground chord" issue
+                    # of ECEF interpolation over long distances.
+                    curr_lat = lat1 + (lat2 - lat1) * frac
+                    curr_lon = lon1 + (lon2 - lon1) * frac
+                    
+                    dx, dy, dz = lla_to_ecef(curr_lat, curr_lon, 0.0)
+                    dense_ecef.append((dx, dy, dz))
+        
+        # Add final point
+        last_lat, last_lon = lla_points[-1]
+        lx, ly, lz = lla_to_ecef(last_lat, last_lon, 0.0)
+        dense_ecef.append((lx, ly, lz))
+        
+        return dense_ecef
+
     def run(self):
         try:
             self.log_message.emit(f"Starting Simulation UDP->{self.ip}:{self.port} Speed={self.speed_mult}x")
@@ -87,7 +135,8 @@ class SimulationWorker(QObject):
 
                 # Pre-compute ECEF path for this ship
                 points = s.resampled_points if s.resampled_points else s.raw_points
-                ecef_path = path_points_to_ecef(points, mi)
+                # Use densified path to prevent "underground" movement and improve high-speed accuracy
+                ecef_path = self._densify_path(points, mi)
 
                 self.dynamic_ships[s.idx] = {
                     'x': x, 'y': y, 'z': z,  # ECEF coordinates (meters)
@@ -196,47 +245,53 @@ class SimulationWorker(QObject):
                     self.last_gui_update_time = current_real_time
 
                 m += 1
-                
+
+                # --- Time Control (consistent pacing) ---
+                # Calculate required delay based on speed multiplier
                 step_delay = dT / self.speed_mult
                 current_loop_elapsed = time.time() - loop_start
                 sleep_time = step_delay - current_loop_elapsed
-                
-                # --- Modified SPS Calculation and Emission Logic ---
-                # Emit more frequently at the beginning, then less frequently
-                sps_update_interval = 10 if m <= 200 else 100 # Emit every 10 steps for first 200, then every 100
+
+                # --- SPS Calculation ---
+                sps_update_interval = 10 if m <= 200 else 100
 
                 if (m - self.last_sps_update_m) >= sps_update_interval:
                     current_time = time.time()
                     time_since_last_sps_update = current_time - self.last_sps_update_time
                     steps_since_last_sps_update = m - self.last_sps_update_m
-                    
+
                     if time_since_last_sps_update > 0:
                         sps = steps_since_last_sps_update / time_since_last_sps_update
                     else:
-                        sps = 0.0 # Avoid division by zero
-                        
+                        sps = 0.0
+
                     log_msg = f"SPS: {sps:.1f} (Elapsed: {current_loop_elapsed:.4f}s, Sleep: {max(0, sleep_time):.4f}s)"
                     self.performance_updated.emit(log_msg)
-                    
+
                     self.last_sps_update_time = current_time
                     self.last_sps_update_m = m
-                # --- End Modified SPS Logic ---
 
+                # Always respect timing - use minimum sleep to prevent runaway speed
                 if sleep_time > 0:
                     time.sleep(sleep_time)
+                else:
+                    # Even if behind schedule, give minimal time for Qt events and prevent 100% CPU
+                    time.sleep(0.001)
 
             # Force final update to ensure end state is visible
             current_positions = {}
             if own_ship and own_ship.raw_points and own_idx in self.dynamic_ships:
                   dyn = self.dynamic_ships[own_idx]
-                  px, py = coords_to_pixel(dyn['lat'], dyn['lon'], mi)
+                  lat, lon, _ = ecef_to_lla(dyn['x'], dyn['y'], dyn['z'])
+                  px, py = coords_to_pixel(lat, lon, mi)
                   current_positions[own_idx] = (px, py, dyn['hdg'], dyn.get('sog', dyn['spd']))
 
             for tgt in self.active_ships:
-                if tgt.idx == own_idx: continue 
+                if tgt.idx == own_idx: continue
                 if tgt.idx in self.dynamic_ships:
                     dyn = self.dynamic_ships[tgt.idx]
-                    px, py = coords_to_pixel(dyn['lat'], dyn['lon'], mi)
+                    lat, lon, _ = ecef_to_lla(dyn['x'], dyn['y'], dyn['z'])
+                    px, py = coords_to_pixel(lat, lon, mi)
                     current_positions[tgt.idx] = (px, py, dyn['hdg'], dyn.get('sog', dyn['spd']))
             self.positions_updated.emit(current_positions)
 
@@ -459,7 +514,8 @@ class SimulationWorker(QObject):
                 x, y, z = lla_to_ecef(0, 0, 0.0)
 
             points = ship.resampled_points if ship.resampled_points else ship.raw_points
-            ecef_path = path_points_to_ecef(points, mi) if points else []
+            # Use densified path to prevent "underground" movement and improve high-speed accuracy
+            ecef_path = self._densify_path(points, mi) if points else []
 
             self.dynamic_ships[ship.idx] = {
                 'x': x, 'y': y, 'z': z,
@@ -476,6 +532,7 @@ class SimulationWorker(QObject):
         if dyn.get('mode') == 'RETURN_TO_PATH' and ecef_path:
             cx, cy, cz = dyn['x'], dyn['y'], dyn['z']
 
+            # Find closest point on path
             best_idx = -1
             best_dist = float('inf')
 
@@ -486,18 +543,44 @@ class SimulationWorker(QObject):
                     best_idx = i
 
             if best_idx != -1:
-                if best_dist < 30:  # 30m threshold
-                    dyn['mode'] = 'FOLLOW_PATH_GEOMETRY'
-                    dyn['current_path_idx'] = best_idx
+                # Calculate distance ship will travel this step
+                speed_kn = dyn.get('spd', 5.0)
+                dist_per_step_m = speed_kn * 1852.0 * (dT / 3600.0)
+
+                # KEY FIX: If ship will reach or overshoot the path this step,
+                # snap directly to path to prevent overshoot at high speeds
+                if best_dist <= dist_per_step_m * 1.5:
+                    # Snap to path position
+                    px, py, pz = ecef_path[best_idx]
+                    dyn['x'], dyn['y'], dyn['z'] = px, py, pz
+
+                    # Switch to normal path following
+                    dyn['path_idx'] = best_idx
+                    dyn['dist_from_last_point'] = 0.0
+                    dyn['following_path'] = True
+                    dyn['mode'] = None
+
+                    # Set heading toward next point
+                    if best_idx < len(ecef_path) - 1:
+                        tx, ty, tz = ecef_path[best_idx + 1]
+                        dyn['hdg'] = ecef_heading(px, py, pz, tx, ty, tz)
+                    elif len(ecef_path) >= 2:
+                        x1, y1, z1 = ecef_path[-2]
+                        x2, y2, z2 = ecef_path[-1]
+                        dyn['hdg'] = ecef_heading(x1, y1, z1, x2, y2, z2)
+                        dyn['following_path'] = False
                 else:
-                    target_idx = min(len(ecef_path) - 1, best_idx + 1)
-                    tx, ty, tz = ecef_path[target_idx]
-                    dyn['hdg'] = ecef_heading(cx, cy, cz, tx, ty, tz)
+                    # Still approaching - set heading toward closest path point
+                    px, py, pz = ecef_path[best_idx]
+                    dyn['hdg'] = ecef_heading(cx, cy, cz, px, py, pz)
 
         elif dyn.get('mode') == 'FOLLOW_PATH_GEOMETRY' and ecef_path:
+            # FOLLOW_PATH_GEOMETRY: Snap ship back to path and follow it
+            # This mode is activated after RETURN_TO_PATH reaches the path
             idx = dyn.get('current_path_idx', 0)
             cx, cy, cz = dyn['x'], dyn['y'], dyn['z']
 
+            # Find the closest point on path (search forward only to prevent backward jumps)
             best_idx = idx
             min_d = float('inf')
             search_limit = min(len(ecef_path), idx + 200)
@@ -509,14 +592,31 @@ class SimulationWorker(QObject):
                     min_d = d
                     best_idx = i
 
-            dyn['current_path_idx'] = best_idx
-            target_idx = min(len(ecef_path) - 1, best_idx + 5)
+            # CRITICAL FIX: Snap position to closest path point to prevent drift
+            # This ensures ship stays ON the path, not just heading toward it
+            if best_idx < len(ecef_path):
+                px, py, pz = ecef_path[best_idx]
+                dyn['x'], dyn['y'], dyn['z'] = px, py, pz
 
-            if target_idx > best_idx:
-                tx, ty, tz = ecef_path[target_idx]
-                dyn['hdg'] = ecef_heading(cx, cy, cz, tx, ty, tz)
-            elif best_idx == len(ecef_path) - 1:
-                dyn['spd'] = 0.0
+            dyn['current_path_idx'] = best_idx
+
+            # Switch to normal path following mode (uses path_idx based movement)
+            dyn['path_idx'] = best_idx
+            dyn['dist_from_last_point'] = 0.0
+            dyn['following_path'] = True
+            dyn['mode'] = None  # Clear FOLLOW_PATH_GEOMETRY mode, now using normal path following
+
+            # Set heading toward next point
+            if best_idx < len(ecef_path) - 1:
+                tx, ty, tz = ecef_path[best_idx + 1]
+                dyn['hdg'] = ecef_heading(px, py, pz, tx, ty, tz)
+            elif best_idx >= len(ecef_path) - 1:
+                # Reached end of path - calculate final heading from last segment
+                if len(ecef_path) >= 2:
+                    x1, y1, z1 = ecef_path[-2]
+                    x2, y2, z2 = ecef_path[-1]
+                    dyn['hdg'] = ecef_heading(x1, y1, z1, x2, y2, z2)
+                dyn['following_path'] = False
 
         # --- Movement Logic (ECEF-based) ---
 
@@ -539,10 +639,20 @@ class SimulationWorker(QObject):
             dist_from_last = dyn.get('dist_from_last_point', 0.0)
 
             if current_idx >= len(ecef_path) - 1:
+                # Set heading to path extension direction before switching to vector mode
+                if len(ecef_path) >= 2:
+                    x1, y1, z1 = ecef_path[-2]
+                    x2, y2, z2 = ecef_path[-1]
+                    dyn['hdg'] = ecef_heading(x1, y1, z1, x2, y2, z2)
                 dyn['following_path'] = False
 
             while dist_remain_m > 0 and dyn.get('following_path'):
                 if current_idx >= len(ecef_path) - 1:
+                    # Set heading to path extension direction
+                    if len(ecef_path) >= 2:
+                        x1, y1, z1 = ecef_path[-2]
+                        x2, y2, z2 = ecef_path[-1]
+                        dyn['hdg'] = ecef_heading(x1, y1, z1, x2, y2, z2)
                     dyn['following_path'] = False
                     break
 
