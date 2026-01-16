@@ -57,8 +57,8 @@ class TargetInfoDialog(QDialog):
         
         self.btn_spd.clicked.connect(self.change_speed)
         self.btn_hdg.clicked.connect(self.change_heading)
-        self.btn_del.clicked.connect(self.accept) # Use accept/reject codes to signal action
-        self.btn_high.clicked.connect(lambda: self.done(2)) # Custom code 2
+        self.btn_del.clicked.connect(self.accept) 
+        self.btn_high.clicked.connect(lambda: self.done(2)) 
         self.btn_close.clicked.connect(self.reject)
         
         btn_box.addWidget(self.btn_spd)
@@ -70,7 +70,7 @@ class TargetInfoDialog(QDialog):
         
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_info)
-        self.timer.start(500) # Update every 500ms
+        self.timer.start(200) 
         self.update_info()
 
     def update_info(self):
@@ -83,8 +83,8 @@ class TargetInfoDialog(QDialog):
         if self.worker and self.worker.running:
             t_now = self.worker.current_time
             
-        # Get dynamic state if available (convert ECEF to LLA)
         state = {'lat':0, 'lon':0, 'spd':0, 'hdg':0}
+        
         if self.worker and self.ship_idx in self.worker.dynamic_ships:
             dyn = self.worker.dynamic_ships[self.ship_idx]
             from app.core.geometry import ecef_to_lla
@@ -95,7 +95,6 @@ class TargetInfoDialog(QDialog):
             
         eta_str = "Unknown"
         
-        # Calculate ETA based on Simulation Duration
         if self.parent() and hasattr(self.parent(), 'sim_time_limit'):
              remaining = max(0, self.parent().sim_time_limit - t_now)
              d = int(remaining // 86400)
@@ -173,7 +172,7 @@ class TargetInfoDialog(QDialog):
             st = self.parent().calculate_ship_state(ship, t_now)
             current_spd = st.get('spd', 0.0)
             
-        val, ok = QInputDialog.getDouble(self, "Change Speed", "New Speed (kn):", value=current_spd, min=0, max=100, decimals=1)
+        val, ok = QInputDialog.getDouble(self, "Change Speed", "New Speed (kn):", value=current_spd, min=0, max=10000, decimals=1)
         if ok:
             if self.worker:
                 self.parent().request_ship_speed_change(self.ship_idx, val)
@@ -202,7 +201,7 @@ class ExtraTimeDialog(QDialog):
         layout = QVBoxLayout(self)
         
         self.time_input = TimeInputWidget()
-        self.time_input.set_seconds(600) # Default 10 mins
+        self.time_input.set_seconds(600) 
         layout.addWidget(QLabel("Additional Time:"))
         layout.addWidget(self.time_input)
         
@@ -228,9 +227,9 @@ class SimulationPanel(QWidget):
         super().__init__(parent)
         self.ship_items = {}
         self.ship_indicators = {}
-        self.ship_trails = {} # idx -> list of QPointF
-        self.trail_items = {} # idx -> QGraphicsPathItem
-        self.planned_paths = {} # idx -> QGraphicsPathItem
+        self.ship_trails = {} 
+        self.trail_items = {} 
+        self.planned_paths = {} 
         self.highlighted_ship_idx = -1
         self.worker = None
         self.worker_thread = None
@@ -238,17 +237,15 @@ class SimulationPanel(QWidget):
         self.data_ready_flag = False
         self.suppress_close_warning = False
         self.blink_timers = {}
-        self.sim_time_limit = 3600
+        self.sim_time_limit = 2592000 # 30 Days default
         self.sim_ended = False
         self.last_pos_dict = {}
-        self.speed_history = {} # {ship_idx: {'t': [], 'v': []}}
+        self.speed_history = {} 
         
-        # UI elements for simulation time
         self._duration_spinbox = None
         self._ext_duration_le = None
         self._ext_start_btn = None
         
-        # Fix for SimMapView right-click crash (MapView expects obj_combo)
         self.obj_combo = QComboBox(self)
         self.obj_combo.setVisible(False)
         
@@ -288,10 +285,8 @@ class SimulationPanel(QWidget):
 
         current_project.ships = [s for s in current_project.ships if s.idx < 1000]
         
-        # Clear trails for removed ships
         active_idxs = {s.idx for s in current_project.ships}
         
-        # Cleanup pos cache for removed ships
         to_remove_pos = [idx for idx in self.last_pos_dict.keys() if idx not in active_idxs]
         for idx in to_remove_pos:
             del self.last_pos_dict[idx]
@@ -320,12 +315,11 @@ class SimulationPanel(QWidget):
         layout.setContentsMargins(5, 5, 5, 5)
         layout.setSpacing(5)
 
-        # --- Top Controls (Single Line) ---
+        # --- Top Controls ---
         top_controls = QWidget()
         top_layout = QHBoxLayout(top_controls)
         top_layout.setContentsMargins(0, 0, 0, 0)
         
-        # IP/Port
         self.ip_edit = QLineEdit("127.0.0.1"); self.ip_edit.setFixedWidth(100)
         self.port_edit = QLineEdit("10110"); self.port_edit.setFixedWidth(60)
         top_layout.addWidget(QLabel("IP:"))
@@ -333,7 +327,6 @@ class SimulationPanel(QWidget):
         top_layout.addWidget(QLabel("Port:"))
         top_layout.addWidget(self.port_edit)
         
-        # Speed
         self.speed_spin = QSpinBox()
         self.speed_spin.setRange(1, 86400)
         self.speed_spin.setValue(1)
@@ -343,37 +336,31 @@ class SimulationPanel(QWidget):
         top_layout.addWidget(QLabel("Speed(x):"))
         top_layout.addWidget(self.speed_spin)
         
-        # Duration
         self.spin_sim_duration = TimeInputWidget()
-        self.spin_sim_duration.set_seconds(3600)
+        self.spin_sim_duration.set_seconds(2592000)
         self.spin_sim_duration.valueChanged.connect(self.on_duration_spin_changed)
         top_layout.addWidget(QLabel("Duration:"))
         top_layout.addWidget(self.spin_sim_duration)
 
-        # Extra Time Button
         self.btn_add_time = QPushButton("Add Extra Time")
         self.btn_add_time.setEnabled(True)
         self.btn_add_time.clicked.connect(self.action_add_extra_time)
         top_layout.addWidget(self.btn_add_time)
 
-        # Follow
         self.combo_follow = QComboBox()
         self.combo_follow.addItem("None", -1)
         top_layout.addWidget(QLabel("Follow:"))
         top_layout.addWidget(self.combo_follow)
         
-        # Show Paths (New)
         self.chk_show_paths = QCheckBox("Show Paths")
         self.chk_show_paths.setChecked(True)
         self.chk_show_paths.toggled.connect(self.draw_static_map)
         top_layout.addWidget(self.chk_show_paths)
         
-        # Capture
         self.btn_capture = QPushButton("Capture")
         self.btn_capture.clicked.connect(self.action_capture)
         top_layout.addWidget(self.btn_capture)
         
-        # Start/Pause/Stop
         self.btn_start = QPushButton("Start")
         self.btn_pause = QPushButton("Pause")
         self.btn_stop = QPushButton("Stop")
@@ -387,7 +374,6 @@ class SimulationPanel(QWidget):
         top_layout.addWidget(self.btn_pause)
         top_layout.addWidget(self.btn_stop)
         
-        # RTG
         self.btn_rtg = QPushButton("Generate Random Target")
         self.btn_rtg.setToolTip("Generate Random Target")
         self.btn_rtg.clicked.connect(self.action_random_target_generate)
@@ -396,7 +382,6 @@ class SimulationPanel(QWidget):
         top_layout.addWidget(self.btn_rtg)
         top_layout.addWidget(self.btn_clear_rtg)
         
-        # Info
         self.perf_label = QLabel("SPS: -")
         self.eta_label = QLabel("Rem: -")
         top_layout.addWidget(self.perf_label)
@@ -406,19 +391,16 @@ class SimulationPanel(QWidget):
         
         layout.addWidget(top_controls)
         
-        # --- Middle Area (Map + Right Panel) ---
         mid_widget = QWidget()
         mid_layout = QHBoxLayout(mid_widget)
         mid_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Map
         self.scene = QGraphicsScene()
         self.view = SimMapView(self.scene, self)
         self.view.mode = "VIEW"
         self.view.view_changed.connect(self.update_pen_widths)
         mid_layout.addWidget(self.view, 3)
         
-        # Right Panel (Tables + Log)
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
@@ -454,15 +436,13 @@ class SimulationPanel(QWidget):
         interval_layout.addWidget(self.interval_table)
         right_layout.addWidget(self.interval_group)
 
-        # --- Tabs for Log and Graph ---
         self.info_tabs = QTabWidget()
         
-        # Tab 1: Log
         log_tab = QWidget()
         log_tab_layout = QVBoxLayout(log_tab)
         log_tab_layout.setContentsMargins(0,0,0,0)
         
-        log_group = QGroupBox("Raw NMEA Output") # Keep group box for styling consistency inside tab
+        log_group = QGroupBox("Raw NMEA Output") 
         log_layout = QVBoxLayout(log_group)
         
         filter_layout = QHBoxLayout()
@@ -489,8 +469,6 @@ class SimulationPanel(QWidget):
         self.log_list.customContextMenuRequested.connect(self.show_log_context_menu)
         log_layout.addWidget(self.log_list)
 
-        # Bottom buttons for log
-        
         hbox_bot = QHBoxLayout()
         self.btn_export = QPushButton("Export CSV")
         self.btn_export.clicked.connect(self.export_csv)
@@ -509,7 +487,6 @@ class SimulationPanel(QWidget):
 
         log_tab_layout.addWidget(log_group)
         
-        # Tab 2: Graph
         graph_tab = QWidget()
         graph_layout = QVBoxLayout(graph_tab)
         self.figure = Figure(figsize=(5, 3), dpi=100)
@@ -528,25 +505,19 @@ class SimulationPanel(QWidget):
         self.update_control_combo()
 
     def generate_random_targets_logic(self, own_ship, R_nm, N_ai, N_ra, N_both, area_id=-1):
-        # Set deterministic seed for RTG based on project seed and current ship count
-        # This ensures that if we reload and generate, we get the same targets.
         seed_val = (current_project.seed + len(current_project.ships)) % (2**32 - 1)
         random.seed(seed_val)
 
-        # 1. Determine Reference Time and State
         t_now = 0.0
         if self.worker and self.worker.running:
             t_now = self.worker.current_time
         
-        # Get Own Ship state at t_now
         own_lat, own_lon, own_spd_kn = 0.0, 0.0, 0.0
         
         mi = current_project.map_info
 
-        # Use current dynamic state if available, otherwise start pos
         if self.worker and self.worker.running and own_ship.idx in self.worker.dynamic_ships:
             dyn = self.worker.dynamic_ships[own_ship.idx]
-            # Convert ECEF to LLA
             from app.core.geometry import ecef_to_lla
             own_lat, own_lon, _ = ecef_to_lla(dyn['x'], dyn['y'], dyn['z'])
             own_spd_kn = dyn['spd']
@@ -555,7 +526,6 @@ class SimulationPanel(QWidget):
             _, _, own_lat, own_lon = pixel_to_coords(px, py, mi)
             own_spd_kn = own_ship.raw_speeds.get(0, 5.0)
 
-        # 2. Generation Loop
         total_targets = N_ai + N_ra + N_both
         
         target_area_poly = None
@@ -567,17 +537,13 @@ class SimulationPanel(QWidget):
                 target_area_poly = QPolygonF(poly_pts)
                 area_bbox = target_area_poly.boundingRect()
 
-        # R in degrees (Approx)
-        # 1 nm = 1/60 degree lat
         R_deg_lat = R_nm / 60.0
         
         for i in range(total_targets):
-            # Determine Type
             if i < N_ai: s_type = "AI"
             elif i < N_ai + N_ra: s_type = "RA"
             else: s_type = "BOTH"
             
-            # 3.2 Start Position (Uniform in Circle)
             if target_area_poly:
                 found = False
                 for _ in range(200):
@@ -595,7 +561,6 @@ class SimulationPanel(QWidget):
                 theta = random.random() * 2 * math.pi
                 
                 d_lat = r * math.cos(theta)
-                # Adjust lon for latitude (cos factor), guard against div by zero
                 cos_lat = math.cos(math.radians(own_lat))
                 if abs(cos_lat) < 0.01: cos_lat = 0.01
                 d_lon = r * math.sin(theta) / cos_lat
@@ -603,23 +568,17 @@ class SimulationPanel(QWidget):
                 start_lat = own_lat + d_lat
                 start_lon = own_lon + d_lon
             
-            # Clamp Start Lat
             start_lat = max(-89.9, min(89.9, start_lat))
             
-            # 3.5 Speed Model (unified variance for wind/current effects)
             variance = current_project.settings.speed_variance
             sigma = math.sqrt(variance)
-            spd = abs(random.gauss(own_spd_kn, sigma)) # Abs as per requirement
+            spd = abs(random.gauss(own_spd_kn, sigma)) 
             if spd < 0.1: spd = 0.1
             
-            # 3.4 Motion Model (Straight Line)
             heading = random.random() * 360.0
             
-            # Generate Path from t_now to End of Own Ship Duration
-            # Since we don't know duration, we just generate a path long enough (e.g. 24 hours)
             duration_remaining = 24 * 3600.0 
             
-            # --- Zigzag Logic ---
             use_zigzag = current_project.settings.rtg_zigzag_enabled
             max_turns = current_project.settings.rtg_zigzag_turns
             angle_limit = current_project.settings.rtg_zigzag_angle_limit
@@ -627,7 +586,6 @@ class SimulationPanel(QWidget):
             segments = []
             if use_zigzag:
                 n_turns = random.randint(1, max_turns)
-                # Split duration into n_turns + 1 segments
                 cut_points = sorted([random.random() for _ in range(n_turns)])
                 cut_points = [0.0] + cut_points + [1.0]
                 for k in range(len(cut_points)-1):
@@ -636,7 +594,6 @@ class SimulationPanel(QWidget):
             else:
                 segments.append(duration_remaining)
             
-            raw_points_geo = [] # (lat, lon)
             curr_lat, curr_lon = start_lat, start_lon
             curr_heading = heading
             
@@ -649,7 +606,6 @@ class SimulationPanel(QWidget):
                 
                 end_lat_seg = curr_lat + dist_deg * math.cos(math.radians(curr_heading))
                 
-                # Boundary check
                 ratio = 1.0
                 hit_boundary = False
                 if end_lat_seg > 90:
@@ -676,18 +632,14 @@ class SimulationPanel(QWidget):
                 
                 if hit_boundary: break
                 
-                # Change heading for next segment
                 if k < len(segments) - 1:
                     change = random.uniform(-angle_limit, angle_limit)
                     curr_heading = (curr_heading + change) % 360.0
             
-            # Create Ship Object
-            # 1. Find unique index >= 1000
             new_idx = 1001
             existing_idxs = {s.idx for s in current_project.ships}
             while new_idx in existing_idxs: new_idx += 1
             
-            # 2. Find unique internal number for naming "Random-{N}"
             r_num = 1
             existing_names = {s.name for s in current_project.ships}
             while f"Random-{r_num}" in existing_names: r_num += 1
@@ -696,16 +648,11 @@ class SimulationPanel(QWidget):
             new_ship.mmsi = random.randint(100000000, 999999999)
             new_ship.is_generated = True
             
-            # 1. Populate Raw Data (Essential for Saving & Editing)
             new_ship.raw_points = raw_pixels
             new_ship.raw_speeds = {0: spd}
             
-            # 2. Populate Simulation Data (Essential for Immediate Visualization)
-            # Optimized: Use waypoints directly instead of dense resampling.
-            # The simulation worker interpolates linearly between these points.
             new_ship.resampled_points = raw_pixels
             
-            # Set Signals
             if s_type == "AI":
                 new_ship.signals_enabled['AIVDM'] = True
                 new_ship.signals_enabled['RATTM'] = False
@@ -721,37 +668,30 @@ class SimulationPanel(QWidget):
             
             current_project.ships.append(new_ship)
             
-        # 4. Real-time Update
         self.refresh_tables()
         self.draw_static_map()
         
-        # Fix: Restore positions to current simulation time if active
         if self.worker and self.worker.running:
-            # Use cached dynamic positions for existing ships to prevent jumping
             pos_dict = self.last_pos_dict.copy()
             
             t_restore = self.worker.current_time
             mi = current_project.map_info
             
-            # Only calculate for NEW ships (or if missing from cache)
             for s in current_project.ships:
                 if not s.is_generated: continue
-                if s.idx in pos_dict and s.idx in self.worker.dynamic_ships: continue # Skip if we have dynamic pos
+                if s.idx in pos_dict and s.idx in self.worker.dynamic_ships: continue 
                 
                 st = self.calculate_ship_state(s, t_restore)
                 px, py = coords_to_pixel(st['lat'], st['lon'], mi)
                 pos_dict[s.idx] = (px, py, st['hdg'], st['spd'])
             self.update_positions(pos_dict)
         
-        # Update Main Window (Combo box and Map)
         if self.window():
             self.window().update_obj_combo()
             self.window().redraw_map()
             if hasattr(self.window(), 'data_changed'):
                 self.window().data_changed.emit()
         
-        # If worker is running, we need to ensure it picks up the new ships.
-        # Assuming worker reads current_project.ships in its loop or we trigger an update.
         if self.worker and self.worker.running:
             self.worker.refresh_active_ships()
 
@@ -974,7 +914,6 @@ class SimulationPanel(QWidget):
         self.combo_follow.clear()
         self.combo_follow.addItem("None", -1)
         
-        # Sort ships: Own, Manual, Random
         own_idx = current_project.settings.own_ship_idx
         own_ship = None
         manual = []
@@ -1015,7 +954,7 @@ class SimulationPanel(QWidget):
         
         layout.addWidget(QLabel("Speed (kn):"), 1, 0)
         self.spin_control_spd = QDoubleSpinBox()
-        self.spin_control_spd.setRange(0, 100)
+        self.spin_control_spd.setRange(0, 10000) 
         self.spin_control_spd.setSingleStep(0.1)
         layout.addWidget(self.spin_control_spd, 1, 1)
         self.btn_set_spd = QPushButton("Set")
@@ -1132,7 +1071,7 @@ class SimulationPanel(QWidget):
         self.scene.clear()
         self.ship_items.clear()
         self.ship_indicators.clear()
-        self.trail_items.clear() # Cleared from scene, need to rebuild if trails exist
+        self.trail_items.clear() 
         self.planned_paths.clear()
         self.add_boundary_masks()
         self.stop_all_blinks()
@@ -1145,10 +1084,9 @@ class SimulationPanel(QWidget):
              
              is_own = (ship.idx == current_project.settings.own_ship_idx)
              
-             # Color Logic
              if is_own:
                  c_hex = current_project.settings.own_color
-             elif ship.idx >= 1000: # Random Target convention
+             elif ship.idx >= 1000:
                  c_hex = current_project.settings.random_color
              else:
                  c_hex = current_project.settings.target_color
@@ -1274,14 +1212,12 @@ class SimulationPanel(QWidget):
             item.setBrush(QBrush(QColor(st.color)))
             self.scene.addItem(item)
             
-        # Restore Dynamic State (Trails and Positions)
         settings = current_project.settings
         current_ship_idxs = {s.idx for s in current_project.ships}
         
         scale = self.view.transform().m11()
         if scale <= 0: scale = 1.0
         
-        # 1. Restore Trails
         for idx, points in self.ship_trails.items():
             if idx not in current_ship_idxs: continue
             if not points: continue
@@ -1307,7 +1243,6 @@ class SimulationPanel(QWidget):
             self.scene.addItem(path_item)
             self.trail_items[idx] = path_item
 
-        # 2. Restore Positions
         if self.worker:
              t_now = self.worker.current_time
              mi = current_project.map_info
@@ -1315,7 +1250,6 @@ class SimulationPanel(QWidget):
              for s in current_project.ships:
                  if not s.is_generated: continue
                  
-                 # FIX: Use last known dynamic position if available to prevent visual jumping
                  if s.idx in self.last_pos_dict:
                      data = self.last_pos_dict[s.idx]
                      px, py = data[0], data[1]
@@ -1343,28 +1277,24 @@ class SimulationPanel(QWidget):
         c = QColor(current_project.settings.mask_color)
         limit = 1e9
         
-        # Left of -180
         r1 = QGraphicsRectItem(-limit, -limit, (-180 * scale) + limit, 2 * limit)
         r1.setBrush(QBrush(c))
         r1.setPen(QPen(Qt.PenStyle.NoPen))
         r1.setZValue(-100)
         self.scene.addItem(r1)
         
-        # Right of 180
         r2 = QGraphicsRectItem(180 * scale, -limit, limit - (180 * scale), 2 * limit)
         r2.setBrush(QBrush(c))
         r2.setPen(QPen(Qt.PenStyle.NoPen))
         r2.setZValue(-100)
         self.scene.addItem(r2)
         
-        # Top (Lat > 90 => y < -90*scale)
         r3 = QGraphicsRectItem(-limit, -limit, 2 * limit, (-90 * scale) + limit)
         r3.setBrush(QBrush(c))
         r3.setPen(QPen(Qt.PenStyle.NoPen))
         r3.setZValue(-100)
         self.scene.addItem(r3)
         
-        # Bottom (Lat < -90 => y > 90*scale)
         r4 = QGraphicsRectItem(-limit, 90 * scale, 2 * limit, limit - (90 * scale))
         r4.setBrush(QBrush(c))
         r4.setPen(QPen(Qt.PenStyle.NoPen))
@@ -1386,7 +1316,6 @@ class SimulationPanel(QWidget):
         
         settings = current_project.settings
         
-        # Planned Paths
         for idx, item in self.planned_paths.items():
             width = settings.path_thickness
             if idx == self.highlighted_ship_idx: width += 1
@@ -1394,7 +1323,6 @@ class SimulationPanel(QWidget):
             pen.setWidthF(width / scale)
             item.setPen(pen)
             
-        # Trails
         for idx, item in self.trail_items.items():
             width = settings.traveled_path_thickness
             pen = item.pen()
@@ -1405,7 +1333,6 @@ class SimulationPanel(QWidget):
         self.ip_edit.setEnabled(not locked)
         self.port_edit.setEnabled(not locked)
         self.spin_sim_duration.setEnabled(not locked)
-        # Extra time controls are managed separately based on sim state
 
     def action_start(self):
         if self.worker and self.worker.running and self.worker.paused:
@@ -1417,14 +1344,13 @@ class SimulationPanel(QWidget):
             self.btn_export.setEnabled(False)
             return
 
-        # Explicitly stop and clean up any previous worker/thread
         if self.worker_thread:
             try:
                 if self.worker_thread.isRunning():
                     self.worker.stop()
                     self.worker_thread.quit()
                     self.worker_thread.wait()
-            except RuntimeError: pass # Thread already deleted
+            except RuntimeError: pass 
             if self.worker:
                 self.worker.deleteLater()
             if self.worker_thread:
@@ -1433,22 +1359,16 @@ class SimulationPanel(QWidget):
             self.worker_thread = None
         self.stop_all_blinks()
             
-        # Clear trails on new start
         self.ship_trails = {}
         self.trail_items = {}
         self.highlighted_ship_idx = -1
         self.last_pos_dict = {}
         self.speed_history = {}
             
-        # Reset map to initial state (t=0)
         self.draw_static_map()
 
         active_ships = [s for s in current_project.ships if s.is_generated]
-        if not current_project.ships: 
-            QMessageBox.warning(self, "Info", "No ships generated.")
-            return
-            
-        # Set Simulation Limit
+        
         self.sim_time_limit = self.spin_sim_duration.get_seconds()
         self.sim_ended = False
 
@@ -1496,14 +1416,10 @@ class SimulationPanel(QWidget):
             if extra <= 0: return
 
             self.sim_time_limit += extra
-            # self.spin_sim_duration.blockSignals(True)
-            # self.spin_sim_duration.set_seconds(self.sim_time_limit)
-            # self.spin_sim_duration.blockSignals(False)
             
             if self.worker:
                 self.worker.update_duration(self.sim_time_limit)
             
-            # If simulation was ended (paused at limit), allow resume
             if self.sim_ended:
                 self.sim_ended = False
                 self.btn_start.setEnabled(True)
@@ -1530,7 +1446,6 @@ class SimulationPanel(QWidget):
     def action_stop(self):
         if self.worker:
             self.worker.stop()
-            # state_changed("STOP") will be emitted in on_finished
 
     def on_finished(self):
         if self.worker_thread:
@@ -1596,7 +1511,6 @@ class SimulationPanel(QWidget):
         menu.exec(self.log_list.mapToGlobal(pos))
             
     def update_positions(self, pos_dict):
-        # Check Simulation Time Limit
         if self.worker and not self.sim_ended:
             if self.worker.current_time >= self.sim_time_limit:
                 self.sim_ended = True
@@ -1605,7 +1519,6 @@ class SimulationPanel(QWidget):
                 self.btn_start.setEnabled(True)
                 self.btn_pause.setEnabled(False)
 
-        # Update Trails
         settings = current_project.settings
         scale = self.view.transform().m11()
         if scale <= 0: scale = 1.0
@@ -1613,7 +1526,6 @@ class SimulationPanel(QWidget):
         active_idxs = {s.idx for s in current_project.ships}
         self.last_pos_dict.update(pos_dict)
 
-        # Update Speed History
         t_now = 0.0
         if self.worker:
             t_now = self.worker.current_time
@@ -1627,7 +1539,6 @@ class SimulationPanel(QWidget):
                 self.speed_history[idx]['t'].append(t_now)
                 self.speed_history[idx]['v'].append(spd)
                 
-                # Keep history manageable
                 if len(self.speed_history[idx]['t']) > 1000:
                     self.speed_history[idx]['t'].pop(0)
                     self.speed_history[idx]['v'].pop(0)
@@ -1641,7 +1552,6 @@ class SimulationPanel(QWidget):
             
             self.ship_trails[idx].append(QPointF(px, py))
             
-            # Create or update trail item
             if idx not in self.trail_items or self.trail_items[idx].scene() != self.scene:
                 path_item = QGraphicsPathItem()
                 self.scene.addItem(path_item)
@@ -1666,13 +1576,10 @@ class SimulationPanel(QWidget):
             pen.setWidthF(settings.traveled_path_thickness / scale)
             pen.setStyle(Qt.PenStyle.SolidLine)
             path_item.setPen(pen)
-            path_item.setZValue(5) # Below ships (10), above static paths (0)
+            path_item.setZValue(5) 
             
-        # [신규 추가] Manual Control UI 갱신 (선택된 선박 정보 업데이트)
         self.update_manual_control_ui() 
 
-        # Time Remaining Logic (Based on Simulation Duration)
-        
         remaining = max(0, self.sim_time_limit - t_now)
         d = int(remaining // 86400)
         h = int((remaining % 86400) // 3600)
@@ -1746,7 +1653,7 @@ class SimulationPanel(QWidget):
             self.spin_control_hdg.blockSignals(False)
 
     def update_speed_graph(self):
-        if self.info_tabs.currentIndex() != 1: return # Only update if visible
+        if self.info_tabs.currentIndex() != 1: return 
         
         target_idx = self.combo_control_ship.currentData()
         if target_idx is None: return
@@ -1756,7 +1663,6 @@ class SimulationPanel(QWidget):
         self.ax.set_xlabel("Time (s)")
         self.ax.set_ylabel("Speed (kn)")
         
-        # Force white background for readability
         self.figure.patch.set_facecolor('#ffffff')
         self.ax.set_facecolor('#ffffff')
         
@@ -1770,14 +1676,12 @@ class SimulationPanel(QWidget):
         active_scen_names = []
         events_list = []
         
-        # Project Events
         for e in current_project.events:
             if e.enabled:
                 ship = current_project.get_ship_by_idx(e.target_ship_idx)
                 s_name = ship.name if ship else "Unknown"
                 events_list.append(f"[Proj] {e.name} (Tgt: {s_name})")
         
-        # Scenario Events
         if app_state.loaded_scenarios:
             for scen in app_state.loaded_scenarios:
                 if scen.enabled:
@@ -1811,20 +1715,17 @@ class SimulationPanel(QWidget):
 
     def on_event_list_double_clicked(self, item):
         text = item.text()
-        # Extract target ship name from string like "[Proj] EventName (Tgt: ShipName)"
         match = re.search(r"\(Tgt: (.*)\)", text)
         if match:
             ship_name = match.group(1)
             target_ship = next((s for s in current_project.ships if s.name == ship_name), None)
             
             if target_ship:
-                # Try to get position from current visual items first (most accurate for display)
                 if target_ship.idx in self.ship_items:
                     item = self.ship_items[target_ship.idx]
                     self.view.centerOn(item.pos())
                     return
 
-                # Fallback if not currently visible/simulated
                 mi = current_project.map_info
                 px, py = coords_to_pixel(target_ship.raw_points[0][0], target_ship.raw_points[0][1], mi) if target_ship.raw_points else (0, 0)
                 self.view.centerOn(px, py)
@@ -1907,11 +1808,10 @@ class SimulationPanel(QWidget):
     
     def cleanup(self):
         if self.worker_thread and self.worker_thread.isRunning():
-            self.action_stop() # Request the worker to stop
-            self.worker_thread.quit() # Tell the thread's event loop to exit
-            self.worker_thread.wait() # Wait for the thread to finish execution
+            self.action_stop() 
+            self.worker_thread.quit() 
+            self.worker_thread.wait() 
             
-            # Clean up the worker and thread objects
             if self.worker:
                 self.worker.deleteLater()
             if self.worker_thread:
@@ -1919,20 +1819,17 @@ class SimulationPanel(QWidget):
         self.stop_all_blinks()
 
     def calculate_ship_state(self, ship, t_current):
-        # If worker is running, return dynamic state (convert ECEF to LLA)
         if self.worker and ship.idx in self.worker.dynamic_ships:
             dyn = self.worker.dynamic_ships[ship.idx]
             from app.core.geometry import ecef_to_lla
             lat, lon, _ = ecef_to_lla(dyn['x'], dyn['y'], dyn['z'])
             return {'lat': lat, 'lon': lon, 'spd': dyn.get('sog', dyn['spd']), 'hdg': dyn['hdg']}
 
-        # If not running, return start position
         mi = current_project.map_info
         if ship.resampled_points:
             px, py = ship.resampled_points[0]
             _, _, lat, lon = pixel_to_coords(px, py, mi)
             
-            # Initial heading
             hdg = 0.0
             if len(ship.resampled_points) > 1:
                 px2, py2 = ship.resampled_points[1]
@@ -1958,13 +1855,13 @@ class SimulationPanel(QWidget):
         dlg = TargetInfoDialog(self, idx, self.worker)
         res = dlg.exec()
         
-        if res == QDialog.DialogCode.Accepted: # Delete
+        if res == QDialog.DialogCode.Accepted: 
             if QMessageBox.question(self, "Delete Target", f"Delete '{ship.name}'?", 
                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
                 self.delete_single_target(idx)
-        elif res == 2: # Highlight
+        elif res == 2: 
             self.highlighted_ship_idx = idx
-            self.draw_static_map() # Redraw to apply highlight style
+            self.draw_static_map() 
 
     def delete_single_target(self, idx):
         current_project.ships = [s for s in current_project.ships if s.idx != idx]
@@ -1998,7 +1895,7 @@ class SimulationPanel(QWidget):
                 return
 
             item = self.ship_items[ship_idx]
-            if count > 8: # 4 blinks (On/Off * 4)
+            if count > 8: 
                 timer.stop()
                 self.restore_ship_color(ship_idx)
                 if ship_idx in self.blink_timers: del self.blink_timers[ship_idx]
