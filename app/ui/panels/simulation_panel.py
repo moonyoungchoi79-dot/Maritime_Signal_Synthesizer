@@ -1668,6 +1668,9 @@ class SimulationPanel(QWidget):
             path_item.setPen(pen)
             path_item.setZValue(5) # Below ships (10), above static paths (0)
             
+        # [신규 추가] Manual Control UI 갱신 (선택된 선박 정보 업데이트)
+        self.update_manual_control_ui() 
+
         # Time Remaining Logic (Based on Simulation Duration)
         
         remaining = max(0, self.sim_time_limit - t_now)
@@ -1720,6 +1723,27 @@ class SimulationPanel(QWidget):
         self.update_speed_graph()
         self.emit_simulation_status()
         self.scene.update()
+
+    def update_manual_control_ui(self):
+        idx = self.combo_control_ship.currentData()
+        if idx is None: return
+        
+        if self.worker and self.worker.running and idx in self.worker.dynamic_ships:
+            dyn = self.worker.dynamic_ships[idx]
+            current_spd = dyn.get('spd', 0.0)
+            current_hdg = dyn.get('hdg', 0.0)
+            
+            self.spin_control_spd.blockSignals(True)
+            self.spin_control_hdg.blockSignals(True)
+            
+            if abs(self.spin_control_spd.value() - current_spd) > 0.01:
+                self.spin_control_spd.setValue(current_spd)
+            
+            if abs(self.spin_control_hdg.value() - current_hdg) > 0.01:
+                self.spin_control_hdg.setValue(current_hdg)
+            
+            self.spin_control_spd.blockSignals(False)
+            self.spin_control_hdg.blockSignals(False)
 
     def update_speed_graph(self):
         if self.info_tabs.currentIndex() != 1: return # Only update if visible

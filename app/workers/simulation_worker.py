@@ -6,6 +6,7 @@ import socket
 import time
 import numpy as np
 import tempfile
+import bisect
 
 from PyQt6.QtCore import QObject, pyqtSignal, Qt, QPointF, QCoreApplication
 from PyQt6.QtGui import QPolygonF
@@ -44,118 +45,136 @@ class SimulationWorker(QObject):
         self.last_emission_times = {}
         self.last_sps_update_time = 0.0
         self.last_sps_update_m = 0
-        self.m = 0 # New attribute to store current step
+        self.m = 0 
         self.current_time = 0.0
-        # self.cached_times = {} # Removed: No pre-calculated times
         self.active_ships = []
         self.triggered_events = set()
-        self.dynamic_ships = {} # {ship_idx: {'lat':, 'lon':, 'spd':, 'hdg':, 'last_update_time':}}
+        self.dynamic_ships = {} 
         self.events = []
         self.max_steps = 0
 
     def _densify_path(self, raw_points, mi, max_segment_m=100.0):
         """
-        Resamples the path into dense ECEF points to approximate Great Circle movement.
-        max_segment_m: Maximum distance between points in meters (default 100m)
+        경로를 Great Circle(대권) 방식으로 보간하여 밀집된 ECEF 좌표 리스트를 생성합니다.
+        3차원 벡터 보간 후 지표면 투영을 통해 지구 곡률을 따르는 매끄러운 경로를 만듭니다.
         """
         if not raw_points or len(raw_points) < 2:
-            return path_points_to_ecef(raw_points, mi)
+            ecef_pts = path_points_to_ecef(raw_points, mi)
+            return ecef_pts, [0.0] * len(ecef_pts), 0.0
 
         dense_ecef = []
         
-        # Convert raw pixels to LLA first
+        # 1. Pixel -> LLA 변환
         lla_points = []
         for px, py in raw_points:
             _, _, lat, lon = pixel_to_coords(px, py, mi)
             lla_points.append((lat, lon))
 
-        # Iterate segments and densify
+        # 2. 구간별 대권 보간 (Great Circle Interpolation)
         for i in range(len(lla_points) - 1):
             lat1, lon1 = lla_points[i]
             lat2, lon2 = lla_points[i+1]
             
-            # Start point ECEF
+            # 시작점
             x1, y1, z1 = lla_to_ecef(lat1, lon1, 0.0)
             dense_ecef.append((x1, y1, z1))
             
-            # Calculate distance
+            # 대권 거리 계산
             dist_m = haversine_distance(lat1, lon1, lat2, lon2)
             
+            # 끝점
+            x2, y2, z2 = lla_to_ecef(lat2, lon2, 0.0)
+
             if dist_m > max_segment_m:
                 num_steps = int(math.ceil(dist_m / max_segment_m))
-                
                 for s in range(1, num_steps):
                     frac = s / num_steps
-                    # Simple linear interpolation of lat/lon avoids the "underground chord" issue
-                    # of ECEF interpolation over long distances.
-                    curr_lat = lat1 + (lat2 - lat1) * frac
-                    curr_lon = lon1 + (lon2 - lon1) * frac
                     
-                    dx, dy, dz = lla_to_ecef(curr_lat, curr_lon, 0.0)
+                    # [핵심] ECEF 3D 보간 (현의 점 계산)
+                    ix, iy, iz = ecef_interpolate(x1, y1, z1, x2, y2, z2, frac)
+                    
+                    # [핵심] 지표면 투영 (Ellipsoid Surface Projection)
+                    t_lat, t_lon, _ = ecef_to_lla(ix, iy, iz)
+                    dx, dy, dz = lla_to_ecef(t_lat, t_lon, 0.0)
+                    
                     dense_ecef.append((dx, dy, dz))
         
-        # Add final point
+        # 마지막 점 추가
         last_lat, last_lon = lla_points[-1]
         lx, ly, lz = lla_to_ecef(last_lat, last_lon, 0.0)
         dense_ecef.append((lx, ly, lz))
         
-        return dense_ecef
+        # 3. 누적 거리(Cumulative Distance) 미리 계산 (Rail Logic용)
+        cumulative_dists = [0.0]
+        total_len = 0.0
+        for i in range(len(dense_ecef) - 1):
+            x1, y1, z1 = dense_ecef[i]
+            x2, y2, z2 = dense_ecef[i+1]
+            seg_len = ecef_distance(x1, y1, z1, x2, y2, z2)
+            total_len += seg_len
+            cumulative_dists.append(total_len)
+
+        return dense_ecef, cumulative_dists, total_len
 
     def run(self):
         try:
             self.log_message.emit(f"Starting Simulation UDP->{self.ip}:{self.port} Speed={self.speed_mult}x")
             self.temp_file_handle = tempfile.TemporaryFile(mode='w+', encoding='utf-8')
             
-            # Set deterministic seed for simulation run
             seed_val = self.proj.seed % (2**32 - 1)
             random.seed(seed_val)
             np.random.seed(seed_val)
             
-            self.active_ships = [s for s in self.proj.ships if s.raw_points] # All ships with paths
+            self.active_ships = [s for s in self.proj.ships if s.raw_points] 
             if not self.active_ships:
                 self.log_message.emit("No active ships with paths.")
                 self.finished.emit()
                 return
 
-            # Initialize dynamic state for ALL ships using ECEF coordinates internally
             self.dynamic_ships = {}
             mi = self.proj.map_info
 
             for s in self.active_ships:
-                # Initialize RNG for this ship
                 s_seed = (self.proj.seed + s.idx) % (2**32 - 1)
                 s_rng = random.Random(s_seed)
 
-                # Use resampled points for geometry
                 start_px, start_py = s.resampled_points[0] if s.resampled_points else s.raw_points[0]
                 _, _, start_lat, start_lon = pixel_to_coords(start_px, start_py, mi)
-
-                # Convert to ECEF for internal storage
                 x, y, z = lla_to_ecef(start_lat, start_lon, 0.0)
 
-                # Pre-compute ECEF path for this ship
                 points = s.resampled_points if s.resampled_points else s.raw_points
-                # Use densified path to prevent "underground" movement and improve high-speed accuracy
-                ecef_path = self._densify_path(points, mi)
+                
+                # [수정] 경로와 거리 정보 함께 계산
+                ecef_path, cum_dists, total_len = self._densify_path(points, mi)
+
+                # 초기 Heading 설정 (첫 구간의 대권 방향)
+                init_hdg = 0.0
+                if len(ecef_path) > 1:
+                    tx, ty, tz = ecef_path[1]
+                    init_hdg = ecef_heading(x, y, z, tx, ty, tz)
 
                 self.dynamic_ships[s.idx] = {
-                    'x': x, 'y': y, 'z': z,  # ECEF coordinates (meters)
-                    'spd': s.raw_speeds.get(0, 5.0),  # Base target speed (knots)
-                    'sog': s.raw_speeds.get(0, 5.0),  # Actual noisy speed (knots)
-                    'hdg': 0.0,  # Heading (degrees)
-                    'path_idx': 0,
-                    'dist_from_last_point': 0.0,
-                    'total_dist_traveled': 0.0,
+                    'x': x, 'y': y, 'z': z,
+                    'spd': s.raw_speeds.get(0, 5.0),
+                    'sog': s.raw_speeds.get(0, 5.0),
+                    'hdg': init_hdg,
+                    
+                    # Rail Logic 변수들
+                    'dist_traveled': 0.0,      
+                    'path_segment_idx': 0,     
+                    'ecef_path': ecef_path,
+                    'cum_dists': cum_dists,    
+                    'total_path_len': total_len,
+                    
                     'following_path': True,
                     'manual_speed': False,
                     'manual_heading': False,
+                    'mode': None,              
                     'rng': s_rng,
-                    'ecef_path': ecef_path  # Pre-computed ECEF path
                 }
             
             self.events = [e for e in self.proj.events if e.enabled]
             self.triggered_events = set()
-            # Note: dynamic_ships was already initialized above, do not reset here
 
             own_idx = self.proj.settings.own_ship_idx
             own_ship = self.proj.get_ship_by_idx(own_idx)
@@ -163,14 +182,15 @@ class SimulationWorker(QObject):
             dT = self.proj.unit_time
             self.max_steps = math.ceil(self.duration_sec / dT)
             
-            self.last_sps_update_time = time.time() # Initialize here for accurate first calculation
-            self.last_sps_update_m = 0             # Initialize here for accurate first calculation
+            self.last_sps_update_time = time.time()
+            self.last_sps_update_m = 0            
 
             mi = self.proj.map_info
 
             m = 0
-            while m <= self.max_steps:
-                if not self.running: break
+            
+            while self.running:
+                # Extra Time 지원을 위해 max_steps 초과 시에도 루프 유지
                 self.m = m
                 
                 QCoreApplication.processEvents()
@@ -179,41 +199,26 @@ class SimulationWorker(QObject):
                       time.sleep(0.1)
                       continue
 
-                # Refresh events list to allow dynamic updates during simulation
+                # Refresh events logic
                 try:
-                    # 1. Project Events
                     active_events = [e for e in self.proj.events if e.enabled]
-                    
-                    # 2. Scenario Events
                     from app.core.state import loaded_scenarios
                     for scen in loaded_scenarios:
                         if not scen.enabled: continue
-                        
                         for evt in scen.events:
                             if not evt.enabled: continue
-                            
-                            # Scope Check
                             should_apply = False
-                            if scen.scope_mode == "ALL_SHIPS":
-                                should_apply = True
+                            if scen.scope_mode == "ALL_SHIPS": should_apply = True
                             elif scen.scope_mode == "OWN_ONLY":
-                                if evt.target_ship_idx == self.proj.settings.own_ship_idx:
-                                    should_apply = True
+                                if evt.target_ship_idx == self.proj.settings.own_ship_idx: should_apply = True
                             elif scen.scope_mode == "TARGET_ONLY":
-                                if evt.target_ship_idx != self.proj.settings.own_ship_idx:
-                                    should_apply = True
+                                if evt.target_ship_idx != self.proj.settings.own_ship_idx: should_apply = True
                             elif scen.scope_mode == "SELECTED_SHIPS":
-                                if evt.target_ship_idx in scen.selected_ships:
-                                    should_apply = True
-                                    
+                                if evt.target_ship_idx in scen.selected_ships: should_apply = True
                             if should_apply:
-                                # Dedup: if event with same ID already in active_events, skip
-                                if not any(e.id == evt.id for e in active_events):
-                                    active_events.append(evt)
-
+                                if not any(e.id == evt.id for e in active_events): active_events.append(evt)
                     self.events = active_events
                 except Exception as e:
-                    # Handle potential list modification during iteration
                     self.log_message.emit(f"[Warning] Error refreshing events: {e}")
 
                 loop_start = time.time()
@@ -246,87 +251,87 @@ class SimulationWorker(QObject):
 
                 m += 1
 
-                # --- Time Control (consistent pacing) ---
-                # Calculate required delay based on speed multiplier
                 step_delay = dT / self.speed_mult
                 current_loop_elapsed = time.time() - loop_start
                 sleep_time = step_delay - current_loop_elapsed
 
-                # --- SPS Calculation ---
                 sps_update_interval = 10 if m <= 200 else 100
-
                 if (m - self.last_sps_update_m) >= sps_update_interval:
                     current_time = time.time()
-                    time_since_last_sps_update = current_time - self.last_sps_update_time
-                    steps_since_last_sps_update = m - self.last_sps_update_m
-
-                    if time_since_last_sps_update > 0:
-                        sps = steps_since_last_sps_update / time_since_last_sps_update
-                    else:
-                        sps = 0.0
-
-                    log_msg = f"SPS: {sps:.1f} (Elapsed: {current_loop_elapsed:.4f}s, Sleep: {max(0, sleep_time):.4f}s)"
+                    time_since = current_time - self.last_sps_update_time
+                    steps_since = m - self.last_sps_update_m
+                    sps = steps_since / time_since if time_since > 0 else 0.0
+                    log_msg = f"SPS: {sps:.1f} (Elapsed: {current_loop_elapsed:.4f}s)"
                     self.performance_updated.emit(log_msg)
-
                     self.last_sps_update_time = current_time
                     self.last_sps_update_m = m
 
-                # Always respect timing - use minimum sleep to prevent runaway speed
                 if sleep_time > 0:
                     time.sleep(sleep_time)
                 else:
-                    # Even if behind schedule, give minimal time for Qt events and prevent 100% CPU
                     time.sleep(0.001)
 
-            # Force final update to ensure end state is visible
-            current_positions = {}
-            if own_ship and own_ship.raw_points and own_idx in self.dynamic_ships:
-                  dyn = self.dynamic_ships[own_idx]
-                  lat, lon, _ = ecef_to_lla(dyn['x'], dyn['y'], dyn['z'])
-                  px, py = coords_to_pixel(lat, lon, mi)
-                  current_positions[own_idx] = (px, py, dyn['hdg'], dyn.get('sog', dyn['spd']))
-
-            for tgt in self.active_ships:
-                if tgt.idx == own_idx: continue
-                if tgt.idx in self.dynamic_ships:
-                    dyn = self.dynamic_ships[tgt.idx]
-                    lat, lon, _ = ecef_to_lla(dyn['x'], dyn['y'], dyn['z'])
-                    px, py = coords_to_pixel(lat, lon, mi)
-                    current_positions[tgt.idx] = (px, py, dyn['hdg'], dyn.get('sog', dyn['spd']))
-            self.positions_updated.emit(current_positions)
-
-            self.log_message.emit("Simulation Finished.")
+            self.log_message.emit("Simulation Stopped.")
             self.export_data_ready.emit(True)
+            self.finished.emit()
               
         except Exception as e:
             traceback.print_exc()
             self.log_message.emit(f"Sim Error: {e}")
         finally:
             self.sock.close()
-            self.finished.emit()
             
     def refresh_active_ships(self):
-        self.active_ships = [s for s in self.proj.ships if s.raw_points] # Refresh list
+        current_indices = {s.idx for s in self.active_ships}
+        new_ships = [s for s in self.proj.ships if s.raw_points and s.idx not in current_indices]
+        
+        mi = self.proj.map_info
+        for s in new_ships:
+            s_seed = (self.proj.seed + s.idx) % (2**32 - 1)
+            s_rng = random.Random(s_seed)
+            points = s.resampled_points if s.resampled_points else s.raw_points
+            if not points: continue
+            
+            ecef_path, cum_dists, total_len = self._densify_path(points, mi)
+            
+            x, y, z = ecef_path[0]
+            init_hdg = 0.0
+            if len(ecef_path) > 1:
+                tx, ty, tz = ecef_path[1]
+                init_hdg = ecef_heading(x, y, z, tx, ty, tz)
+
+            self.dynamic_ships[s.idx] = {
+                'x': x, 'y': y, 'z': z,
+                'spd': s.raw_speeds.get(0, 5.0),
+                'sog': 5.0,
+                'hdg': init_hdg,
+                'dist_traveled': 0.0,
+                'path_segment_idx': 0,
+                'ecef_path': ecef_path,
+                'cum_dists': cum_dists,
+                'total_path_len': total_len,
+                'following_path': True,
+                'manual_speed': False,
+                'manual_heading': False,
+                'mode': None,
+                'rng': s_rng
+            }
+            self.active_ships.append(s)
 
     def send_nmea(self, raw, ts_obj):
         if self.temp_file_handle:
             try:
                 line = f"{ts_obj.timestamp()},{raw}\n"
                 self.temp_file_handle.write(line)
-            except Exception as e:
-                self.log_message.emit(f"[Warning] Failed to write to temp file: {e}")
-
+            except: pass
         try:
             self.sock.sendto((raw + "\r\n").encode('ascii'), (self.ip, self.port))
-        except socket.error as e:
-            self.log_message.emit(f"[Warning] UDP send failed ({self.ip}:{self.port}): {e}")
-        except Exception as e:
-            self.log_message.emit(f"[Warning] Unexpected error in send_nmea: {e}")
-
-        current_real_time = time.time()
-        if current_real_time - self.last_log_update_time > 0.2:
+        except: pass
+        
+        cur_t = time.time()
+        if cur_t - self.last_log_update_time > 0.2:
             self.signal_generated.emit(raw)
-            self.last_log_update_time = current_real_time
+            self.last_log_update_time = cur_t
 
     def stop(self):
         self.running = False
@@ -344,111 +349,69 @@ class SimulationWorker(QObject):
         self.max_steps = math.ceil(new_duration / self.proj.unit_time)
 
     def set_ship_speed(self, ship_idx, speed_kn):
-        ship = self.proj.get_ship_by_idx(ship_idx)
-        if not ship: return
-
-        # Ensure ship is in dynamic_ships (should be initialized in run)
-        if ship_idx not in self.dynamic_ships:
-            # Should not happen if refresh_active_ships is correct, but safe fallback?
-            return
-        self.dynamic_ships[ship_idx]['manual_speed'] = True
-        self.dynamic_ships[ship_idx]['spd'] = speed_kn
-        self.log_message.emit(f"[Manual] Speed changed for {ship.name} to {speed_kn} kn")
+        if ship_idx in self.dynamic_ships:
+            self.dynamic_ships[ship_idx]['manual_speed'] = True
+            self.dynamic_ships[ship_idx]['spd'] = speed_kn
+            ship = self.proj.get_ship_by_idx(ship_idx)
+            self.log_message.emit(f"[Manual] Speed changed for {ship.name if ship else ship_idx} to {speed_kn} kn")
 
     def set_ship_heading(self, ship_idx, heading_deg):
-        ship = self.proj.get_ship_by_idx(ship_idx)
-        if not ship: return
-
-        if ship_idx not in self.dynamic_ships:
-            return
-        
-        self.dynamic_ships[ship_idx]['hdg'] = heading_deg
-        self.dynamic_ships[ship_idx]['following_path'] = False
-        self.log_message.emit(f"[Manual] Heading changed for {ship.name} to {heading_deg} deg")
+        if ship_idx in self.dynamic_ships:
+            self.dynamic_ships[ship_idx]['hdg'] = heading_deg
+            self.dynamic_ships[ship_idx]['manual_heading'] = True
+            self.dynamic_ships[ship_idx]['following_path'] = False
+            ship = self.proj.get_ship_by_idx(ship_idx)
+            self.log_message.emit(f"[Manual] Heading changed for {ship.name if ship else ship_idx} to {heading_deg} deg")
 
     def check_events(self, t_current):
         for evt in self.events:
             if evt.id in self.triggered_events: continue
-            
             triggered = False
-            log_detail = ""
-            if evt.trigger_type == "TIME":
-                if t_current >= evt.condition_value:
-                    triggered = True
-            elif evt.trigger_type == "AREA_ENTER":
-                # Check if target ship is in area
-                ship = self.proj.get_ship_by_idx(evt.target_ship_idx)
-                area = self.proj.get_area_by_id(int(evt.condition_value))
-                if ship and area and ship.is_generated:
-                    # Get current position (either dynamic or static)
-                    state = self.get_current_state(ship)
-                    px, py = coords_to_pixel(state['lat_deg'], state['lon_deg'], self.proj.map_info)
-                    poly = QPolygonF([QPointF(x,y) for x,y in area.geometry])
-                    if poly.containsPoint(QPointF(px, py), Qt.FillRule.OddEvenFill):
-                        triggered = True
-            elif evt.trigger_type == "AREA_LEAVE":
-                # Check if target ship is OUTSIDE area
-                ship = self.proj.get_ship_by_idx(evt.target_ship_idx)
-                area = self.proj.get_area_by_id(int(evt.condition_value))
-                if ship and area:
-                    state = self.get_current_state(ship)
-                    px, py = coords_to_pixel(state['lat_deg'], state['lon_deg'], self.proj.map_info)
-                    poly = QPolygonF([QPointF(x,y) for x,y in area.geometry])
-                    if not poly.containsPoint(QPointF(px, py), Qt.FillRule.OddEvenFill):
-                        triggered = True
-            elif evt.trigger_type in ["CPA_UNDER", "CPA_OVER", "DIST_UNDER", "DIST_OVER"]:
-                # Check distance between target ship and reference ship using ECEF
-                target_ship = self.proj.get_ship_by_idx(evt.target_ship_idx)
-
-                ref_idx = evt.reference_ship_idx
-                if ref_idx == -1:
-                    ref_idx = self.proj.settings.own_ship_idx
-
-                ref_ship = self.proj.get_ship_by_idx(ref_idx)
-
-                if target_ship and ref_ship:
-                    # Use ECEF distance calculation directly
-                    tgt_dyn = self.dynamic_ships.get(target_ship.idx)
-                    ref_dyn = self.dynamic_ships.get(ref_ship.idx)
-
-                    if tgt_dyn and ref_dyn:
-                        dist_m = ecef_distance(
-                            tgt_dyn['x'], tgt_dyn['y'], tgt_dyn['z'],
-                            ref_dyn['x'], ref_dyn['y'], ref_dyn['z']
-                        )
-
-                        # Convert to nautical miles
-                        val_compare = dist_m / 1852.0
-                        unit_str = "NM" if evt.trigger_type in ["CPA_UNDER", "CPA_OVER"] else "nm"
-
-                        if evt.trigger_type in ["CPA_UNDER", "DIST_UNDER"] and val_compare <= evt.condition_value:
-                            triggered = True
-                        elif evt.trigger_type in ["CPA_OVER", "DIST_OVER"] and val_compare >= evt.condition_value:
-                            triggered = True
-
-                        if triggered:
-                            ts_str = (self.proj.start_time + datetime.timedelta(seconds=t_current)).strftime("%Y-%m-%dT%H:%M:%SZ")
-                            op_str = "<=" if "UNDER" in evt.trigger_type else ">="
-                            log_detail = f"ref={ref_ship.name}, tgt={target_ship.name}, dist={val_compare:.1f}{unit_str} {op_str} {evt.condition_value}{unit_str} @ {ts_str}"
             
-            if triggered:
-                if log_detail:
-                    self.log_message.emit(f"[EVENT] {evt.name} fired: {log_detail}")
-                else:
-                    self.log_message.emit(f"Event Triggered: {evt.name} ({evt.action_type})")
+            if evt.trigger_type == "TIME":
+                if t_current >= evt.condition_value: triggered = True
+            elif evt.trigger_type == "AREA_ENTER":
+                ship = self.proj.get_ship_by_idx(evt.target_ship_idx)
+                area = self.proj.get_area_by_id(int(evt.condition_value))
+                if ship and area and ship.idx in self.dynamic_ships:
+                    dyn = self.dynamic_ships[ship.idx]
+                    lat, lon, _ = ecef_to_lla(dyn['x'], dyn['y'], dyn['z'])
+                    px, py = coords_to_pixel(lat, lon, self.proj.map_info)
+                    poly = QPolygonF([QPointF(x,y) for x,y in area.geometry])
+                    if poly.containsPoint(QPointF(px, py), Qt.FillRule.OddEvenFill): triggered = True
+            elif evt.trigger_type == "AREA_LEAVE":
+                ship = self.proj.get_ship_by_idx(evt.target_ship_idx)
+                area = self.proj.get_area_by_id(int(evt.condition_value))
+                if ship and area and ship.idx in self.dynamic_ships:
+                    dyn = self.dynamic_ships[ship.idx]
+                    lat, lon, _ = ecef_to_lla(dyn['x'], dyn['y'], dyn['z'])
+                    px, py = coords_to_pixel(lat, lon, self.proj.map_info)
+                    poly = QPolygonF([QPointF(x,y) for x,y in area.geometry])
+                    if not poly.containsPoint(QPointF(px, py), Qt.FillRule.OddEvenFill): triggered = True
+            elif evt.trigger_type in ["CPA_UNDER", "CPA_OVER", "DIST_UNDER", "DIST_OVER"]:
+                tgt_ship = self.proj.get_ship_by_idx(evt.target_ship_idx)
+                ref_idx = evt.reference_ship_idx
+                if ref_idx == -1: ref_idx = self.proj.settings.own_ship_idx
+                ref_ship = self.proj.get_ship_by_idx(ref_idx)
+                
+                if tgt_ship and ref_ship and tgt_ship.idx in self.dynamic_ships and ref_ship.idx in self.dynamic_ships:
+                    td = self.dynamic_ships[tgt_ship.idx]
+                    rd = self.dynamic_ships[ref_ship.idx]
+                    dist_m = ecef_distance(td['x'], td['y'], td['z'], rd['x'], rd['y'], rd['z'])
+                    val_compare = dist_m / 1852.0
                     
+                    if evt.trigger_type == "DIST_UNDER" and val_compare <= evt.condition_value: triggered = True
+                    elif evt.trigger_type == "DIST_OVER" and val_compare >= evt.condition_value: triggered = True
+
+            if triggered:
+                self.log_message.emit(f"[EVENT] {evt.name} triggered.")
                 self.event_triggered.emit(evt.name, evt.target_ship_idx)
                 self.triggered_events.add(evt.id)
                 self.apply_event_action(evt, t_current)
 
     def apply_event_action(self, evt, t_current):
         sid = evt.target_ship_idx
-        ship = self.proj.get_ship_by_idx(sid)
-        if not ship: return
-        
-        if sid not in self.dynamic_ships:
-            return
-            
+        if sid not in self.dynamic_ships: return
         dyn = self.dynamic_ships[sid]
         
         if evt.action_type == "STOP":
@@ -456,9 +419,6 @@ class SimulationWorker(QObject):
             dyn['manual_speed'] = True
         elif evt.action_type == "CHANGE_SPEED":
             dyn['spd'] = evt.action_value
-            # Re-enable path following if we weren't manually steering
-            if not dyn.get('manual_heading', False):
-                dyn['following_path'] = True
             dyn['manual_speed'] = True
         elif evt.action_type == "CHANGE_HEADING":
             dyn['hdg'] = evt.action_value
@@ -471,257 +431,176 @@ class SimulationWorker(QObject):
             elif opt == "ChangeDestination_ToOriginalFinal":
                 ecef_path = dyn.get('ecef_path', [])
                 if ecef_path:
-                    # Get last point in ECEF path
+                    # 벡터 모드로 전환, 초기 헤딩은 최종점 방향
                     tx, ty, tz = ecef_path[-1]
-                    # Calculate heading using ECEF
                     dyn['hdg'] = ecef_heading(dyn['x'], dyn['y'], dyn['z'], tx, ty, tz)
-
-    def get_current_state(self, ship):
-        """Helper to return current state dict for event checking (converts ECEF to LLA)."""
-        if ship.idx in self.dynamic_ships:
-            dyn = self.dynamic_ships[ship.idx]
-            # Convert ECEF to LLA for external use
-            lat, lon, _ = ecef_to_lla(dyn['x'], dyn['y'], dyn['z'])
-            sog = dyn.get('sog', dyn['spd'])
-            return {
-                "lat_deg": lat,
-                "lon_deg": normalize_lon(lon),
-                "sog_knots": sog,
-                "sog_kmh": sog * 1.852,
-                "sog_mps": sog * 0.51444444,
-                "heading_true_deg": dyn['hdg'],
-                "cog_true_deg": dyn['hdg']
-            }
-        return {"lat_deg":0, "lon_deg":0, "sog_knots":0, "heading_true_deg":0}
+                    dyn['following_path'] = False 
+                    dyn['manual_heading'] = True 
 
     def update_and_get_state(self, ship, dT):
-        """
-        Update ship state for one time step using ECEF coordinates internally.
-        Returns state with LLA coordinates for external use.
-        """
-        mi = self.proj.map_info
-
-        # Ensure dynamic state exists
+        # 안전장치: 동적 상태 없으면 초기화
         if ship.idx not in self.dynamic_ships:
-            s_seed = (self.proj.seed + ship.idx) % (2**32 - 1)
-            s_rng = random.Random(s_seed)
-
+            mi = self.proj.map_info
             if ship.resampled_points:
                 px, py = ship.resampled_points[0]
                 _, _, lat, lon = pixel_to_coords(px, py, mi)
                 x, y, z = lla_to_ecef(lat, lon, 0.0)
+                ecef_path, cum_dists, total_len = self._densify_path(ship.resampled_points, mi)
             else:
                 x, y, z = lla_to_ecef(0, 0, 0.0)
-
-            points = ship.resampled_points if ship.resampled_points else ship.raw_points
-            # Use densified path to prevent "underground" movement and improve high-speed accuracy
-            ecef_path = self._densify_path(points, mi) if points else []
-
+                ecef_path, cum_dists, total_len = [], [], 0.0
+                
             self.dynamic_ships[ship.idx] = {
                 'x': x, 'y': y, 'z': z,
-                'spd': 5.0, 'sog': 5.0, 'hdg': 0, 'path_idx': 0,
-                'dist_from_last_point': 0.0, 'total_dist_traveled': 0.0,
+                'spd': 5.0, 'sog': 5.0, 'hdg': 0, 
+                'dist_traveled': 0.0, 'path_segment_idx': 0,
+                'ecef_path': ecef_path, 'cum_dists': cum_dists, 'total_path_len': total_len,
                 'following_path': True, 'manual_speed': False, 'manual_heading': False,
-                'rng': s_rng, 'ecef_path': ecef_path
+                'mode': None, 'rng': random.Random()
             }
 
         dyn = self.dynamic_ships[ship.idx]
         ecef_path = dyn.get('ecef_path', [])
+        cum_dists = dyn.get('cum_dists', [])
+        total_len = dyn.get('total_path_len', 0.0)
 
-        # --- Guidance Logic for Maneuvers (using ECEF) ---
+        # 1. 속도 및 노이즈 계산
+        variance = getattr(self.proj.settings, "speed_variance", 1.0)
+        sigma = math.sqrt(variance)
+        noise = dyn['rng'].gauss(0, sigma)
+        
+        target_spd = dyn.get('spd', 0.0)
+        if target_spd > 0.01:
+            current_speed_kn = max(0.0, target_spd + noise)
+        else:
+            current_speed_kn = 0.0
+            
+        move_dist_m = current_speed_kn * 1852.0 * (dT / 3600.0)
+        
+        # 2. RETURN_TO_PATH 모드 처리
         if dyn.get('mode') == 'RETURN_TO_PATH' and ecef_path:
             cx, cy, cz = dyn['x'], dyn['y'], dyn['z']
-
-            # Find closest point on path
-            best_idx = -1
+            best_idx = 0
             best_dist = float('inf')
-
-            for i, (px, py, pz) in enumerate(ecef_path):
+            
+            # 전체 경로 중 가장 가까운 점 찾기 (Global Minimum)
+            for i in range(len(ecef_path)):
+                px, py, pz = ecef_path[i]
                 d = ecef_distance(cx, cy, cz, px, py, pz)
                 if d < best_dist:
                     best_dist = d
                     best_idx = i
+            
+            if best_dist <= move_dist_m * 1.5: 
+                # 복귀 성공
+                dyn['following_path'] = True
+                dyn['mode'] = None
+                dyn['dist_traveled'] = cum_dists[best_idx]
+                dyn['path_segment_idx'] = best_idx
+                dyn['x'], dyn['y'], dyn['z'] = ecef_path[best_idx]
+            else:
+                # 복귀 중: 목표점을 향해 대권 항해
+                tx, ty, tz = ecef_path[best_idx]
+                target_hdg = ecef_heading(cx, cy, cz, tx, ty, tz)
+                
+                lat, lon, _ = ecef_to_lla(cx, cy, cz)
+                nlat, nlon, nhdg = self._move_great_circle_step(lat, lon, target_hdg, move_dist_m)
+                
+                dyn['x'], dyn['y'], dyn['z'] = lla_to_ecef(nlat, nlon, 0.0)
+                dyn['hdg'] = nhdg
+                
+                return self._make_state_result(nlat, nlon, current_speed_kn, nhdg)
 
-            if best_idx != -1:
-                # Calculate distance ship will travel this step
-                speed_kn = dyn.get('spd', 5.0)
-                dist_per_step_m = speed_kn * 1852.0 * (dT / 3600.0)
-
-                # KEY FIX: If ship will reach or overshoot the path this step,
-                # snap directly to path to prevent overshoot at high speeds
-                if best_dist <= dist_per_step_m * 1.5:
-                    # Snap to path position
-                    px, py, pz = ecef_path[best_idx]
-                    dyn['x'], dyn['y'], dyn['z'] = px, py, pz
-
-                    # Switch to normal path following
-                    dyn['path_idx'] = best_idx
-                    dyn['dist_from_last_point'] = 0.0
-                    dyn['following_path'] = True
-                    dyn['mode'] = None
-
-                    # Set heading toward next point
-                    if best_idx < len(ecef_path) - 1:
-                        tx, ty, tz = ecef_path[best_idx + 1]
-                        dyn['hdg'] = ecef_heading(px, py, pz, tx, ty, tz)
-                    elif len(ecef_path) >= 2:
-                        x1, y1, z1 = ecef_path[-2]
-                        x2, y2, z2 = ecef_path[-1]
-                        dyn['hdg'] = ecef_heading(x1, y1, z1, x2, y2, z2)
-                        dyn['following_path'] = False
-                else:
-                    # Still approaching - set heading toward closest path point
-                    px, py, pz = ecef_path[best_idx]
-                    dyn['hdg'] = ecef_heading(cx, cy, cz, px, py, pz)
-
-        elif dyn.get('mode') == 'FOLLOW_PATH_GEOMETRY' and ecef_path:
-            # FOLLOW_PATH_GEOMETRY: Snap ship back to path and follow it
-            # This mode is activated after RETURN_TO_PATH reaches the path
-            idx = dyn.get('current_path_idx', 0)
-            cx, cy, cz = dyn['x'], dyn['y'], dyn['z']
-
-            # Find the closest point on path (search forward only to prevent backward jumps)
-            best_idx = idx
-            min_d = float('inf')
-            search_limit = min(len(ecef_path), idx + 200)
-
-            for i in range(idx, search_limit):
-                px, py, pz = ecef_path[i]
-                d = ecef_distance(cx, cy, cz, px, py, pz)
-                if d < min_d:
-                    min_d = d
-                    best_idx = i
-
-            # CRITICAL FIX: Snap position to closest path point to prevent drift
-            # This ensures ship stays ON the path, not just heading toward it
-            if best_idx < len(ecef_path):
-                px, py, pz = ecef_path[best_idx]
-                dyn['x'], dyn['y'], dyn['z'] = px, py, pz
-
-            dyn['current_path_idx'] = best_idx
-
-            # Switch to normal path following mode (uses path_idx based movement)
-            dyn['path_idx'] = best_idx
-            dyn['dist_from_last_point'] = 0.0
-            dyn['following_path'] = True
-            dyn['mode'] = None  # Clear FOLLOW_PATH_GEOMETRY mode, now using normal path following
-
-            # Set heading toward next point
-            if best_idx < len(ecef_path) - 1:
-                tx, ty, tz = ecef_path[best_idx + 1]
-                dyn['hdg'] = ecef_heading(px, py, pz, tx, ty, tz)
-            elif best_idx >= len(ecef_path) - 1:
-                # Reached end of path - calculate final heading from last segment
-                if len(ecef_path) >= 2:
-                    x1, y1, z1 = ecef_path[-2]
-                    x2, y2, z2 = ecef_path[-1]
-                    dyn['hdg'] = ecef_heading(x1, y1, z1, x2, y2, z2)
-                dyn['following_path'] = False
-
-        # --- Movement Logic (ECEF-based) ---
-
-        # Apply speed noise
-        variance = getattr(self.proj.settings, "speed_variance", 1.0)
-        sigma = math.sqrt(variance)
-        noise = dyn['rng'].gauss(0, sigma)
-
-        if dyn['spd'] > 0.01:
-            current_speed = max(0.0, dyn['spd'] + noise)
-        else:
-            current_speed = 0.0
-
-        # Distance to travel this step (meters)
-        dist_step_m = current_speed * 1852.0 * (dT / 3600.0)
-
+        # 3. 이동 로직: Rail vs Vector
+        active_rail = False
         if dyn.get('following_path') and ecef_path:
-            dist_remain_m = dist_step_m
-            current_idx = dyn.get('path_idx', 0)
-            dist_from_last = dyn.get('dist_from_last_point', 0.0)
+            if dyn['dist_traveled'] + move_dist_m <= total_len:
+                active_rail = True
+            else:
+                # 경로 종료 -> Vector Mode
+                dyn['following_path'] = False 
+                active_rail = False
 
-            if current_idx >= len(ecef_path) - 1:
-                # Set heading to path extension direction before switching to vector mode
-                if len(ecef_path) >= 2:
-                    x1, y1, z1 = ecef_path[-2]
-                    x2, y2, z2 = ecef_path[-1]
-                    dyn['hdg'] = ecef_heading(x1, y1, z1, x2, y2, z2)
-                dyn['following_path'] = False
-
-            while dist_remain_m > 0 and dyn.get('following_path'):
-                if current_idx >= len(ecef_path) - 1:
-                    # Set heading to path extension direction
-                    if len(ecef_path) >= 2:
-                        x1, y1, z1 = ecef_path[-2]
-                        x2, y2, z2 = ecef_path[-1]
-                        dyn['hdg'] = ecef_heading(x1, y1, z1, x2, y2, z2)
-                    dyn['following_path'] = False
-                    break
-
-                # Current and next waypoints in ECEF
-                x_curr, y_curr, z_curr = ecef_path[current_idx]
-                x_next, y_next, z_next = ecef_path[current_idx + 1]
-
-                # Segment distance
-                d_seg_total = ecef_distance(x_curr, y_curr, z_curr, x_next, y_next, z_next)
-                dist_to_next = d_seg_total - dist_from_last
-
-                if dist_to_next > dist_remain_m:
-                    # Move intermediate along segment
-                    dist_from_last += dist_remain_m
-                    dyn['total_dist_traveled'] += dist_remain_m
-                    frac = dist_from_last / d_seg_total if d_seg_total > 0 else 0
-
-                    # Interpolate ECEF position
-                    dyn['x'], dyn['y'], dyn['z'] = ecef_interpolate(
-                        x_curr, y_curr, z_curr, x_next, y_next, z_next, frac
-                    )
-
-                    # Update heading
-                    dyn['hdg'] = ecef_heading(x_curr, y_curr, z_curr, x_next, y_next, z_next)
-
-                    dyn['dist_from_last_point'] = dist_from_last
-                    dist_remain_m = 0
-                else:
-                    # Reached waypoint
-                    dyn['x'], dyn['y'], dyn['z'] = x_next, y_next, z_next
-                    dist_remain_m -= dist_to_next
-                    dyn['total_dist_traveled'] += dist_to_next
-                    current_idx += 1
-                    dyn['path_idx'] = current_idx
-                    dyn['dist_from_last_point'] = 0.0
-
-            # Vector movement after path end
-            if not dyn.get('following_path') and dist_remain_m > 0:
-                new_x, new_y, new_z = ecef_move(
-                    dyn['x'], dyn['y'], dyn['z'], dyn['hdg'], dist_remain_m
-                )
-                dyn['x'], dyn['y'], dyn['z'] = new_x, new_y, new_z
-                dyn['total_dist_traveled'] += dist_remain_m
-
+        if active_rail:
+            # --- RAIL MODE (경로 추종) ---
+            dyn['dist_traveled'] += move_dist_m
+            curr_d = dyn['dist_traveled']
+            
+            # 이분 탐색으로 구간 찾기
+            idx = bisect.bisect_right(cum_dists, curr_d) - 1
+            idx = max(0, min(idx, len(ecef_path) - 2))
+            dyn['path_segment_idx'] = idx
+            
+            d_start = cum_dists[idx]
+            d_end = cum_dists[idx+1]
+            segment_len = d_end - d_start
+            
+            frac = (curr_d - d_start) / segment_len if segment_len > 1e-6 else 0.0
+            x1, y1, z1 = ecef_path[idx]
+            x2, y2, z2 = ecef_path[idx+1]
+            
+            # 대권 보간 위치
+            dyn['x'], dyn['y'], dyn['z'] = ecef_interpolate(x1, y1, z1, x2, y2, z2, frac)
+            # 대권 접선 방향 헤딩
+            dyn['hdg'] = ecef_heading(x1, y1, z1, x2, y2, z2)
+            
         else:
-            # Vector movement (not following path)
-            if dist_step_m > 0:
-                new_x, new_y, new_z = ecef_move(
-                    dyn['x'], dyn['y'], dyn['z'], dyn['hdg'], dist_step_m
-                )
-                dyn['x'], dyn['y'], dyn['z'] = new_x, new_y, new_z
-                dyn['total_dist_traveled'] += dist_step_m
+            # --- VECTOR MODE (대권 자유 항해) ---
+            if move_dist_m > 0:
+                lat, lon, _ = ecef_to_lla(dyn['x'], dyn['y'], dyn['z'])
+                nlat, nlon, nhdg = self._move_great_circle_step(lat, lon, dyn['hdg'], move_dist_m)
+                
+                dyn['x'], dyn['y'], dyn['z'] = lla_to_ecef(nlat, nlon, 0.0)
+                dyn['hdg'] = nhdg
 
-        # Convert ECEF to LLA for output
+        # 4. 결과 반환
         lat, lon, _ = ecef_to_lla(dyn['x'], dyn['y'], dyn['z'])
-
-        # Clamp latitude and stop if at pole
-        if lat > 89.9:
-            lat = 89.9
-            dyn['spd'] = 0
-        elif lat < -89.9:
-            lat = -89.9
-            dyn['spd'] = 0
-
+        
+        if lat > 89.9: lat = 89.9
+        elif lat < -89.9: lat = -89.9
         lon = normalize_lon(lon)
+        
+        return self._make_state_result(lat, lon, current_speed_kn, dyn['hdg'])
 
-        sog = current_speed
-        cog = dyn['hdg']
+    def _move_great_circle_step(self, lat, lon, hdg_deg, dist_m):
+        """
+        현재 위치에서 대권 항해(Great Circle Sailing)로 이동 후 
+        새 위치와 해당 지점에서의 방위각(Bearing)을 반환합니다.
+        """
+        lat_rad = math.radians(lat)
+        lon_rad = math.radians(lon)
+        hdg_rad = math.radians(hdg_deg)
+        R = 6371000.0 # Earth Radius
+        ang_dist = dist_m / R
 
+        # New Position
+        new_lat_rad = math.asin(
+            math.sin(lat_rad) * math.cos(ang_dist) +
+            math.cos(lat_rad) * math.sin(ang_dist) * math.cos(hdg_rad)
+        )
+        
+        new_lon_rad = lon_rad + math.atan2(
+            math.sin(hdg_rad) * math.sin(ang_dist) * math.cos(lat_rad),
+            math.cos(ang_dist) - math.sin(lat_rad) * math.sin(new_lat_rad)
+        )
+        
+        new_lat = math.degrees(new_lat_rad)
+        new_lon = normalize_lon(math.degrees(new_lon_rad))
+
+        # New Heading (Final Bearing)
+        # Using Back Azimuth + 180 degrees
+        y = math.sin(lon_rad - new_lon_rad) * math.cos(lat_rad)
+        x = math.cos(new_lat_rad) * math.sin(lat_rad) - \
+            math.sin(new_lat_rad) * math.cos(lat_rad) * math.cos(lon_rad - new_lon_rad)
+        
+        back_bearing_rad = math.atan2(y, x)
+        back_bearing_deg = math.degrees(back_bearing_rad)
+        
+        new_hdg = (back_bearing_deg + 180) % 360
+        
+        return new_lat, new_lon, new_hdg
+
+    def _make_state_result(self, lat, lon, sog, cog):
         return {
             "lat_deg": lat,
             "lon_deg": lon,
@@ -733,6 +612,14 @@ class SimulationWorker(QObject):
             "elapsed_sec": 0
         }
 
+    def get_current_state(self, ship):
+        if ship.idx in self.dynamic_ships:
+            dyn = self.dynamic_ships[ship.idx]
+            lat, lon, _ = ecef_to_lla(dyn['x'], dyn['y'], dyn['z'])
+            sog = dyn.get('sog', dyn['spd'])
+            return self._make_state_result(lat, lon, sog, dyn['hdg'])
+        return self._make_state_result(0,0,0,0)
+
     def check_dropout(self, stype):
         prob = self.proj.settings.dropout_probs.get(stype, 0.1)
         return random.random() < prob
@@ -743,124 +630,58 @@ class SimulationWorker(QObject):
             return base_ts + datetime.timedelta(seconds=offset)
         return base_ts
 
-    def add_position_noise(self, lat, lon, ship_idx, talker):
-        ship = self.proj.get_ship_by_idx(ship_idx)
-        if not ship:
-            return lat, lon
-
-        variance = ship.variances.get(talker, 0.0)
-        if variance <= 0:
-            return lat, lon
-
-        std_dev = np.sqrt(variance)
-        
-        # Approximate conversion: meters to degrees
-        # 1 deg lat ~= 111,111 meters
-        # 1 deg lon ~= 111,111 * cos(lat) meters
-        meters_per_deg_lat = 111111.0
-        meters_per_deg_lon = 111111.0 * math.cos(math.radians(lat))
-        
-        noise_n_m = random.gauss(0, std_dev) # North offset in meters
-        noise_e_m = random.gauss(0, std_dev) # East offset in meters
-        
-        d_lat = noise_n_m / meters_per_deg_lat
-        d_lon = noise_e_m / meters_per_deg_lon if abs(meters_per_deg_lon) > 1e-6 else 0.0
-        
-        return lat + d_lat, lon + d_lon
-
     def generate_ais_radar_group(self, own, tgt, state, ts_val):
         jitter_ts = self.get_jittered_time(ts_val)
         base = self.make_base_row(own, tgt, state, jitter_ts)
-        
-        # --- AIS Message Group Handling ---
         stype = "AIVDM"
         ship = self.proj.get_ship_by_idx(tgt.idx)
         if ship:
-            if ship.signals_enabled.get(stype, True): # Check if AIVDM is enabled
+            if ship.signals_enabled.get(stype, True): 
                 interval = ship.signal_intervals.get(stype, 1.0)
                 current_sim_time = (jitter_ts - self.proj.start_time).total_seconds()
                 last_time = self.last_emission_times.get((ship.idx, stype), -float('inf'))
-
-                if (current_sim_time + 1e-9) >= (last_time + interval): # It's time to send
-                    if not self.check_dropout(stype): # Check dropout for the whole group
+                if (current_sim_time + 1e-9) >= (last_time + interval): 
+                    if not self.check_dropout(stype): 
                         ais_msgs = self.gen_ais_multi(base, state, "VDM", tgt.mmsi)
-                        for msg in ais_msgs:
-                            self.send_nmea(msg, jitter_ts) # Send each fragment directly
-                        self.last_emission_times[(ship.idx, stype)] = current_sim_time # Update time AFTER all fragments sent
-        # --- End AIS Message Group Handling ---
-
+                        for msg in ais_msgs: self.send_nmea(msg, jitter_ts) 
+                        self.last_emission_times[(ship.idx, stype)] = current_sim_time 
         self.try_emit(self.gen_ttm(base, state), "RATTM", jitter_ts, tgt.idx)
 
     def try_emit(self, raw, stype, ts_obj, ship_idx):
         ship = self.proj.get_ship_by_idx(ship_idx)
         if not ship: return
-
-        if not ship.signals_enabled.get(stype, True):
-            return
-
+        if not ship.signals_enabled.get(stype, True): return
         interval = ship.signal_intervals.get(stype, 1.0)
         current_sim_time = (ts_obj - self.proj.start_time).total_seconds()
-        
         last_time = self.last_emission_times.get((ship_idx, stype), -float('inf'))
-        
-        # Add a small epsilon to handle floating point inaccuracies
-        if (current_sim_time + 1e-9) < (last_time + interval):
-            return
-
+        if (current_sim_time + 1e-9) < (last_time + interval): return
         if not raw: return
-        
         self.last_emission_times[(ship_idx, stype)] = current_sim_time
-        
-        if self.check_dropout(stype):
-            return 
-            
+        if self.check_dropout(stype): return 
         self.send_nmea(raw, ts_obj)
 
     def make_base_row(self, rcv, tgt, state, ts_val):
-        return {
-            "tgt_ship_index": tgt.idx,
-            "tgt_ship_name": tgt.name,
-            "rx_time": ts_val
-        }
+        return { "tgt_ship_index": tgt.idx, "tgt_ship_name": tgt.name, "rx_time": ts_val }
 
     def gen_ais_multi(self, base, state, stype, mmsi):
-        # Determine number of fragments based on probabilities
         probs = current_project.settings.ais_fragment_probs
-        # Normalize probabilities if they don't sum to 1
         total_prob = sum(probs)
-        # Avoid division by zero if all probabilities are zero
-        if total_prob == 0:
-            total_fragments = 1 # Default to 1 fragment if no probabilities are set
+        if total_prob == 0: total_fragments = 1 
         else:
             normalized_probs = [p / total_prob for p in probs]
-            # Choose total_fragments (1-5) based on normalized probabilities
-            # The `choices` function returns a list, so we take the first element
             total_fragments = random.choices(range(1, 6), weights=normalized_probs, k=1)[0]
-        
-        payload = encode_ais_payload(mmsi) # Pass MMSI to the encoder
-        
-        # Calculate fragment length. Ensure it's at least 1 to avoid empty fragments if payload is short.
-        # AIS messages have a maximum payload size. For simplicity, we'll split evenly.
-        fragment_min_len = 1 # Minimum fragment length
+        payload = encode_ais_payload(mmsi) 
+        fragment_min_len = 1 
         fragment_length = max(fragment_min_len, math.ceil(len(payload) / total_fragments))
-        
         ais_messages = []
-        seq_id = random.randint(0, 9) # Sequence ID for multi-part messages
-        
+        seq_id = random.randint(0, 9) 
         for i in range(total_fragments):
             start_idx = i * fragment_length
-            end_idx = min(len(payload), (i + 1) * fragment_length) # Ensure we don't go out of bounds
-            
+            end_idx = min(len(payload), (i + 1) * fragment_length) 
             fragment = payload[start_idx : end_idx]
-            
-            # Construct the AIS message part
-            # !AI<stype>,<total_fragments>,<fragment_number>,<sequence_id>,<channel>,<fragment_payload>,<fill_bits>
-            # channel 'A' or 'B' (hardcoded for now to 'A')
-            # fill_bits '0' (hardcoded for now)
             raw = f"!AI{stype},{total_fragments},{i+1},{seq_id},A,{fragment},0"
             msg = f"{raw}*{calculate_checksum(raw[1:])}"
             ais_messages.append(msg)
-            
         return ais_messages
 
     def gen_ttm(self, base, state):
