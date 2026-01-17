@@ -218,7 +218,7 @@ class MainWindow(QMainWindow):
                 border-radius: 2px;
             }}
             QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
-                border: 2px solid {s.select_color};  # type: ignore
+                border: 2px solid {s.select_color};
                 padding: 1px;
             }}
             
@@ -231,10 +231,10 @@ class MainWindow(QMainWindow):
             }}
             QPushButton:hover {{
                 background-color: {input_bg};
-                border: 2px solid {s.select_color};  # type: ignore
+                border: 2px solid {s.select_color};
                 padding: 3px;
             }}
-            QPushButton:pressed {{ background-color: {s.select_color}; color: white; }}  # type: ignore
+            QPushButton:pressed {{ background-color: {s.select_color}; color: white; }}
             QPushButton:disabled {{ 
                 background-color: {disabled_bg}; 
                 color: {disabled_text}; 
@@ -256,17 +256,17 @@ class MainWindow(QMainWindow):
                 padding: 0 3px 0 3px;
             }}
             QPushButton#spdBtn {{
-                background-color: {s.btn_speed_color}; color: white; border-radius: 8px;  # type: ignore
+                background-color: {s.btn_speed_color}; color: white; border-radius: 8px;
                 max-height: 24px; padding: 2px 10px; }}
             QPushButton#spdBtn:hover {{ opacity: 0.8; }}
             QPushButton#spdBtn:disabled {{ background-color: {disabled_bg}; color: {disabled_text}; border: 1px solid {disabled_border}; }}
             QPushButton#simBtn {{
-                background-color: {s.btn_sim_color}; color: white; border-radius: 8px;  # type: ignore
+                background-color: {s.btn_sim_color}; color: white; border-radius: 8px;
                 max-height: 24px; padding: 2px 10px; }}
             QPushButton#simBtn:hover {{ opacity: 0.8; }}
             QPushButton#simBtn:disabled {{ background-color: {disabled_bg}; color: {disabled_text}; border: 1px solid {disabled_border}; }}
             QPushButton#rtgBtn {{
-                background-color: {s.btn_rtg_color}; color: white; border-radius: 8px;  # type: ignore
+                background-color: {s.btn_rtg_color}; color: white; border-radius: 8px;
                 max-height: 24px; padding: 2px 10px; }}
             QPushButton#rtgBtn:hover {{ opacity: 0.8; }}
             QPushButton#rtgBtn:disabled {{ background-color: {disabled_bg}; color: {disabled_text}; border: 1px solid {disabled_border}; }}

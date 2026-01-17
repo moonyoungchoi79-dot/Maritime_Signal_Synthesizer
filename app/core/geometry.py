@@ -1,9 +1,11 @@
 import math
 import numpy as np
-from typing import List, Tuple
-from app.core.models.map_info import MapInfo
+from typing import List, Tuple, TYPE_CHECKING
 
-def haversine_distance(lat1, lon1, lat2, lon2):
+if TYPE_CHECKING:
+    from app.core.models.map_info import MapInfo
+
+def vincenty_distance(lat1, lon1, lat2, lon2):
     
     a = 6378137.0         
     f = 1 / 298.257223563 
@@ -99,14 +101,14 @@ def resample_polygon_equidistant(points: List[Tuple[float, float]], n_out: int):
     new_y = np.interp(target_dists, cum_dist, pts[:, 1])
     return list(zip(new_x, new_y))
 
-def pixel_to_coords(px, py, mi: MapInfo):
+def pixel_to_coords(px, py, mi: "MapInfo"):
     scale = mi.pixels_per_degree
     if scale <= 0: scale = 1.0
     lon = px / scale
     lat = -py / scale
     return 0.0, 0.0, lat, lon
 
-def coords_to_pixel(lat, lon, mi: MapInfo):
+def coords_to_pixel(lat, lon, mi: "MapInfo"):
     scale = mi.pixels_per_degree
     px = lon * scale
     py = -lat * scale

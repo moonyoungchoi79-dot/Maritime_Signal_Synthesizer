@@ -2,9 +2,10 @@ import uuid
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QLineEdit,
     QComboBox, QDialogButtonBox, QLabel, QDoubleSpinBox, QMessageBox,
-    QGroupBox, QCheckBox
+    QGroupBox, QCheckBox, QPushButton, QListWidget, QListWidgetItem
 )
-from app.core.models.event import SimEvent
+from PyQt6.QtCore import Qt
+from app.core.models.event import SimEvent, EventCondition
 from app.core.models.project import current_project
 
 class EventEditorDialog(QDialog):
@@ -12,7 +13,7 @@ class EventEditorDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Edit Event" if event else "New Event")
         self.event = event
-        self.resize(400, 450)
+        self.resize(500, 600)
         self.init_ui()
         if event:
             self.load_event()
@@ -95,7 +96,50 @@ class EventEditorDialog(QDialog):
         act_layout.addRow(self.lon_label, self.lon_spin)
         
         layout.addWidget(grp_action)
-        
+
+        # 조건부 이벤트 그룹
+        grp_prereq = QGroupBox("Prerequisite Events (조건부 이벤트)")
+        prereq_layout = QVBoxLayout(grp_prereq)
+
+        # 논리 연산자 선택
+        logic_layout = QHBoxLayout()
+        logic_label = QLabel("Logic:")
+        self.logic_combo = QComboBox()
+        self.logic_combo.addItems(["AND (모든 조건 충족)", "OR (하나라도 충족)"])
+        logic_layout.addWidget(logic_label)
+        logic_layout.addWidget(self.logic_combo)
+        logic_layout.addStretch()
+        prereq_layout.addLayout(logic_layout)
+
+        # 조건 추가 행
+        add_layout = QHBoxLayout()
+        self.prereq_event_combo = QComboBox()
+        self.prereq_event_combo.setMinimumWidth(200)
+        self._populate_event_combo()
+        add_layout.addWidget(self.prereq_event_combo)
+
+        self.prereq_mode_combo = QComboBox()
+        self.prereq_mode_combo.addItems(["TRIGGERED (발동됨)", "NOT_TRIGGERED (발동 안됨)"])
+        add_layout.addWidget(self.prereq_mode_combo)
+
+        self.btn_add_prereq = QPushButton("+")
+        self.btn_add_prereq.setFixedWidth(30)
+        self.btn_add_prereq.clicked.connect(self._add_prerequisite)
+        add_layout.addWidget(self.btn_add_prereq)
+        prereq_layout.addLayout(add_layout)
+
+        # 조건 목록
+        self.prereq_list = QListWidget()
+        self.prereq_list.setMaximumHeight(80)
+        prereq_layout.addWidget(self.prereq_list)
+
+        # 삭제 버튼
+        self.btn_remove_prereq = QPushButton("Remove Selected")
+        self.btn_remove_prereq.clicked.connect(self._remove_prerequisite)
+        prereq_layout.addWidget(self.btn_remove_prereq)
+
+        layout.addWidget(grp_prereq)
+
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         btns.accepted.connect(self.on_ok)
         btns.rejected.connect(self.reject)
@@ -115,6 +159,42 @@ class EventEditorDialog(QDialog):
         self.area_combo.clear()
         for a in current_project.areas:
             self.area_combo.addItem(a.name, a.id)
+
+    def _populate_event_combo(self):
+        """다른 이벤트들로 콤보박스 채우기"""
+        self.prereq_event_combo.clear()
+        current_id = self.event.id if self.event else None
+        for evt in current_project.events:
+            if evt.id != current_id:  # 자기 자신 제외
+                self.prereq_event_combo.addItem(evt.name, evt.id)
+
+    def _add_prerequisite(self):
+        """선행 조건 추가"""
+        if self.prereq_event_combo.count() == 0:
+            return
+
+        event_id = self.prereq_event_combo.currentData()
+        event_name = self.prereq_event_combo.currentText()
+        mode = "TRIGGERED" if self.prereq_mode_combo.currentIndex() == 0 else "NOT_TRIGGERED"
+        mode_text = "발동됨" if mode == "TRIGGERED" else "발동 안됨"
+
+        # 중복 체크
+        for i in range(self.prereq_list.count()):
+            item = self.prereq_list.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == event_id:
+                QMessageBox.warning(self, "Warning", "이미 추가된 이벤트입니다.")
+                return
+
+        item = QListWidgetItem(f"{event_name} → {mode_text}")
+        item.setData(Qt.ItemDataRole.UserRole, event_id)
+        item.setData(Qt.ItemDataRole.UserRole + 1, mode)
+        self.prereq_list.addItem(item)
+
+    def _remove_prerequisite(self):
+        """선택된 선행 조건 제거"""
+        current_row = self.prereq_list.currentRow()
+        if current_row >= 0:
+            self.prereq_list.takeItem(current_row)
 
     def update_trigger_ui(self):
         ttype = self.trigger_type_combo.currentText()
@@ -205,6 +285,34 @@ class EventEditorDialog(QDialog):
             except:
                 pass
 
+        # 조건부 이벤트 로드
+        logic = getattr(self.event, 'prerequisite_logic', 'AND')
+        self.logic_combo.setCurrentIndex(0 if logic == "AND" else 1)
+
+        prereqs = getattr(self.event, 'prerequisite_events', [])
+        self.prereq_list.clear()
+        for cond in prereqs:
+            # cond가 EventCondition 객체 또는 dict일 수 있음
+            if isinstance(cond, dict):
+                event_id = cond.get('event_id', '')
+                mode = cond.get('mode', 'TRIGGERED')
+            else:
+                event_id = cond.event_id
+                mode = cond.mode
+
+            # 이벤트 이름 찾기
+            event_name = event_id
+            for evt in current_project.events:
+                if evt.id == event_id:
+                    event_name = evt.name
+                    break
+
+            mode_text = "발동됨" if mode == "TRIGGERED" else "발동 안됨"
+            item = QListWidgetItem(f"{event_name} → {mode_text}")
+            item.setData(Qt.ItemDataRole.UserRole, event_id)
+            item.setData(Qt.ItemDataRole.UserRole + 1, mode)
+            self.prereq_list.addItem(item)
+
     def on_ok(self):
         name = self.name_edit.text().strip()
         if not name:
@@ -233,7 +341,16 @@ class EventEditorDialog(QDialog):
             self.event.action_option = self.action_opt_combo.currentText()
         elif self.event.action_type == "CHANGE_DESTINATION_LOC":
             self.event.action_option = f"{self.lat_spin.value()},{self.lon_spin.value()}"
-            
+
+        # 조건부 이벤트 저장
+        self.event.prerequisite_logic = "AND" if self.logic_combo.currentIndex() == 0 else "OR"
+        self.event.prerequisite_events = []
+        for i in range(self.prereq_list.count()):
+            item = self.prereq_list.item(i)
+            event_id = item.data(Qt.ItemDataRole.UserRole)
+            mode = item.data(Qt.ItemDataRole.UserRole + 1)
+            self.event.prerequisite_events.append(EventCondition(event_id=event_id, mode=mode))
+
         self.accept()
 
     def get_event(self):

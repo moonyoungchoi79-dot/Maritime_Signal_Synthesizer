@@ -72,7 +72,7 @@ class EventScriptPanel(QWidget):
         self.chk_enabled = QCheckBox("Enabled")
         
         self.combo_trigger = QComboBox()
-        self.combo_trigger.addItems(["TIME", "AREA_ENTER", "AREA_LEAVE", "CPA_UNDER", "CPA_OVER"])
+        self.combo_trigger.addItems(["TIME", "AREA_ENTER", "AREA_LEAVE", "CPA_UNDER", "CPA_OVER", "DIST_UNDER", "DIST_OVER"])
         self.combo_trigger.currentIndexChanged.connect(self.update_ui_state)
         
         # Time Reference (Start vs End)

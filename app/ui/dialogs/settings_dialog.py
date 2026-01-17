@@ -1,14 +1,25 @@
 from PyQt6.QtWidgets import (
-    QDialog, QHBoxLayout, QListWidget, QFrame, QStackedWidget, QVBoxLayout, 
-    QDialogButtonBox, QWidget, QGroupBox, QFormLayout, QPushButton, QLabel, 
-    QCheckBox, QSpinBox, QComboBox, QTableWidget, QHeaderView, QTableWidgetItem, 
-    QDoubleSpinBox, QMessageBox, QColorDialog, QAbstractSpinBox
+    QDialog, QHBoxLayout, QListWidget, QFrame, QStackedWidget, QVBoxLayout,
+    QDialogButtonBox, QWidget, QGroupBox, QFormLayout, QPushButton, QLabel,
+    QCheckBox, QSpinBox, QComboBox, QTableWidget, QHeaderView, QTableWidgetItem,
+    QDoubleSpinBox, QMessageBox, QColorDialog, QAbstractSpinBox, QTabWidget,
+    QSlider, QScrollArea, QSizePolicy
 )
 from PyQt6.QtCore import (
     Qt
 )
 
+try:
+    import pyqtgraph as pg
+    PYQTGRAPH_AVAILABLE = True
+except ImportError:
+    PYQTGRAPH_AVAILABLE = False
+
+import math
+import numpy as np
+
 from app.core.models.project import current_project
+from app.core.models.settings import RECEPTION_PRESETS, ReceptionModelConfig, ARPATrackConfig
 
 class SettingsDialog(QDialog):
     def __init__(self, parent=None):
@@ -18,7 +29,7 @@ class SettingsDialog(QDialog):
         
         main_h = QHBoxLayout(self)
         self.list_widget = QListWidget()
-        self.list_widget.addItems(["Appearance", "Dropout", "Object", "Signal", "Simulation"])
+        self.list_widget.addItems(["Appearance", "Reception Model", "Object", "Signal", "Simulation"])
         self.list_widget.setFixedWidth(150)
         
         line = QFrame()
@@ -146,21 +157,414 @@ class SettingsDialog(QDialog):
         self.stack.addWidget(w)
 
     def init_dropout(self):
+        """Reception Model (거리 기반 수신 모델) 탭 초기화"""
         w = QWidget()
-        l = QFormLayout(w)
+        main_layout = QVBoxLayout(w)
+
+        # 상단: 전체 활성화 체크박스와 프리셋
+        top_layout = QHBoxLayout()
+
+        self.chk_reception_enabled = QCheckBox("Distance-based reception model 사용")
+        self.chk_reception_enabled.setChecked(current_project.settings.reception_model_enabled)
+        self.chk_reception_enabled.stateChanged.connect(self._on_reception_enabled_changed)
+        top_layout.addWidget(self.chk_reception_enabled)
+
+        top_layout.addStretch()
+
+        preset_label = QLabel("Preset:")
+        top_layout.addWidget(preset_label)
+
+        self.combo_preset = QComboBox()
+        self.combo_preset.addItems(["Realistic (Default)", "Stable (Demo)", "Harsh (Stress)", "Custom"])
+        preset_map = {"realistic": 0, "stable": 1, "harsh": 2, "custom": 3}
+        self.combo_preset.setCurrentIndex(preset_map.get(current_project.settings.reception_preset, 0))
+        self.combo_preset.currentIndexChanged.connect(self._on_preset_changed)
+        top_layout.addWidget(self.combo_preset)
+
+        self.btn_reset_preset = QPushButton("Reset to Preset")
+        self.btn_reset_preset.clicked.connect(self._apply_preset)
+        top_layout.addWidget(self.btn_reset_preset)
+
+        main_layout.addLayout(top_layout)
+
+        # 서브 탭 위젯
+        self.reception_tabs = QTabWidget()
+
+        # AIS 탭
+        ais_tab = self._create_reception_tab("ais", current_project.settings.ais_reception)
+        self.reception_tabs.addTab(ais_tab, "AIS")
+
+        # Radar 탭
+        radar_tab = self._create_reception_tab("radar", current_project.settings.radar_detect)
+        self.reception_tabs.addTab(radar_tab, "Radar")
+
+        # ARPA 탭 (추가 설정 포함)
+        arpa_tab = self._create_reception_tab("arpa", current_project.settings.arpa_track, is_arpa=True)
+        self.reception_tabs.addTab(arpa_tab, "ARPA")
+
+        # Camera 탭
+        camera_tab = self._create_reception_tab("camera", current_project.settings.camera_reception)
+        self.reception_tabs.addTab(camera_tab, "Camera")
+
+        # Preview 탭
+        preview_tab = self._create_preview_tab()
+        self.reception_tabs.addTab(preview_tab, "Preview")
+
+        main_layout.addWidget(self.reception_tabs)
+
+        # 기존 고정 확률 방식 (하위 호환성)
+        legacy_group = QGroupBox("Legacy Dropout (when reception model disabled)")
+        legacy_layout = QFormLayout(legacy_group)
         self.drop_spins = {}
-        for key in [
-            "AIVDM", "RATTM", "Camera"]:
+        for key in ["AIVDM", "RATTM", "Camera"]:
             s = QDoubleSpinBox()
             s.setRange(0, 1)
             s.setSingleStep(0.01)
             s.setValue(current_project.settings.dropout_probs.get(key, 0.1))
-            
-            label = QLabel(f"{key} Dropout Probability:")
-            label.setToolTip(f"Probability that {key} signal is lost (0.0=No loss, 1.0=Always lost).")
-            l.addRow(label, s)
+            label = QLabel(f"{key} Dropout:")
+            legacy_layout.addRow(label, s)
             self.drop_spins[key] = s
+        main_layout.addWidget(legacy_group)
+
+        self._on_reception_enabled_changed()
         self.stack.addWidget(w)
+
+    def _create_reception_tab(self, tab_type: str, config, is_arpa: bool = False):
+        """각 신호 타입별 수신 모델 탭 생성"""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+
+        tab_widget = QWidget()
+        layout = QVBoxLayout(tab_widget)
+
+        # Simple Settings 그룹
+        simple_group = QGroupBox("Simple Settings")
+        simple_layout = QFormLayout(simple_group)
+
+        # d0: Max reliable range
+        spin_d0 = QDoubleSpinBox()
+        spin_d0.setRange(0, 200)
+        spin_d0.setSingleStep(1)
+        spin_d0.setDecimals(1)
+        spin_d0.setSuffix(" NM")
+        spin_d0.setValue(config.d0)
+        spin_d0.valueChanged.connect(lambda v: self._update_preview())
+        simple_layout.addRow("Max reliable range (d0):", spin_d0)
+
+        # d1: Fade-out end
+        spin_d1 = QDoubleSpinBox()
+        spin_d1.setRange(0, 200)
+        spin_d1.setSingleStep(1)
+        spin_d1.setDecimals(1)
+        spin_d1.setSuffix(" NM")
+        spin_d1.setValue(config.d1)
+        spin_d1.valueChanged.connect(lambda v: self._update_preview())
+        simple_layout.addRow("Fade-out end (d1):", spin_d1)
+
+        # p0: Near-range dropout
+        spin_p0 = QDoubleSpinBox()
+        spin_p0.setRange(0, 1)
+        spin_p0.setSingleStep(0.01)
+        spin_p0.setDecimals(2)
+        spin_p0.setValue(config.p0)
+        spin_p0.valueChanged.connect(lambda v: self._update_preview())
+        simple_layout.addRow("Near-range dropout (p0):", spin_p0)
+
+        # p1: At d1 dropout
+        spin_p1 = QDoubleSpinBox()
+        spin_p1.setRange(0, 1)
+        spin_p1.setSingleStep(0.01)
+        spin_p1.setDecimals(2)
+        spin_p1.setValue(config.p1)
+        spin_p1.valueChanged.connect(lambda v: self._update_preview())
+        simple_layout.addRow("At d1 dropout (p1):", spin_p1)
+
+        # Full block at d1
+        chk_full_block = QCheckBox()
+        chk_full_block.setChecked(config.full_block_at_d1)
+        chk_full_block.stateChanged.connect(lambda v: self._update_preview())
+        simple_layout.addRow("d >= d1 에서 완전 차단:", chk_full_block)
+
+        layout.addWidget(simple_group)
+
+        # Advanced Settings 그룹 (접힘)
+        adv_group = QGroupBox("Advanced Settings")
+        adv_group.setCheckable(True)
+        adv_group.setChecked(False)
+        adv_layout = QFormLayout(adv_group)
+
+        # Curve type
+        combo_curve = QComboBox()
+        combo_curve.addItems(["smoothstep", "linear", "logistic"])
+        combo_curve.setCurrentText(config.curve_type)
+        combo_curve.currentTextChanged.connect(lambda v: self._update_preview())
+        adv_layout.addRow("Curve type:", combo_curve)
+
+        # Burst loss
+        chk_burst = QCheckBox("Enable burst loss")
+        chk_burst.setChecked(config.burst_enabled)
+        adv_layout.addRow("", chk_burst)
+
+        spin_burst_min = QDoubleSpinBox()
+        spin_burst_min.setRange(0.1, 60)
+        spin_burst_min.setValue(config.burst_min_sec)
+        spin_burst_min.setSuffix(" s")
+        adv_layout.addRow("Min burst length:", spin_burst_min)
+
+        spin_burst_max = QDoubleSpinBox()
+        spin_burst_max.setRange(0.1, 60)
+        spin_burst_max.setValue(config.burst_max_sec)
+        spin_burst_max.setSuffix(" s")
+        adv_layout.addRow("Max burst length:", spin_burst_max)
+
+        spin_burst_mult = QDoubleSpinBox()
+        spin_burst_mult.setRange(0.1, 10)
+        spin_burst_mult.setValue(config.burst_trigger_mult)
+        adv_layout.addRow("Burst trigger multiplier:", spin_burst_mult)
+
+        # ARPA 전용 설정
+        spin_coast = None
+        spin_reacquire = None
+        if is_arpa:
+            arpa_config = config  # ARPATrackConfig
+            spin_coast = QDoubleSpinBox()
+            spin_coast.setRange(0, 60)
+            spin_coast.setValue(arpa_config.coast_time_sec)
+            spin_coast.setSuffix(" s")
+            adv_layout.addRow("Coast time (track hold):", spin_coast)
+
+            spin_reacquire = QDoubleSpinBox()
+            spin_reacquire.setRange(0, 1)
+            spin_reacquire.setSingleStep(0.05)
+            spin_reacquire.setValue(arpa_config.reacquire_prob)
+            adv_layout.addRow("Reacquire probability:", spin_reacquire)
+
+        layout.addWidget(adv_group)
+        layout.addStretch()
+
+        # 위젯 참조 저장
+        if not hasattr(self, 'reception_widgets'):
+            self.reception_widgets = {}
+
+        self.reception_widgets[tab_type] = {
+            'd0': spin_d0, 'd1': spin_d1, 'p0': spin_p0, 'p1': spin_p1,
+            'full_block': chk_full_block, 'curve': combo_curve,
+            'burst_enabled': chk_burst, 'burst_min': spin_burst_min,
+            'burst_max': spin_burst_max, 'burst_mult': spin_burst_mult,
+            'coast': spin_coast, 'reacquire': spin_reacquire
+        }
+
+        scroll.setWidget(tab_widget)
+        return scroll
+
+    def _create_preview_tab(self):
+        """Preview 탭 생성 (pyqtgraph 그래프)"""
+        tab_widget = QWidget()
+        layout = QVBoxLayout(tab_widget)
+
+        # 거리 슬라이더
+        slider_layout = QHBoxLayout()
+        slider_label = QLabel("Distance:")
+        slider_layout.addWidget(slider_label)
+
+        self.preview_slider = QSlider(Qt.Orientation.Horizontal)
+        self.preview_slider.setRange(0, 60)
+        self.preview_slider.setValue(30)
+        self.preview_slider.valueChanged.connect(self._on_preview_slider_changed)
+        slider_layout.addWidget(self.preview_slider)
+
+        self.preview_dist_label = QLabel("30 NM")
+        self.preview_dist_label.setMinimumWidth(60)
+        slider_layout.addWidget(self.preview_dist_label)
+
+        layout.addLayout(slider_layout)
+
+        # pyqtgraph 그래프
+        if PYQTGRAPH_AVAILABLE:
+            self.preview_plot = pg.PlotWidget()
+            self.preview_plot.setBackground('w')
+            self.preview_plot.setLabel('left', 'Dropout Probability', units='%')
+            self.preview_plot.setLabel('bottom', 'Distance', units='NM')
+            self.preview_plot.setYRange(0, 100)
+            self.preview_plot.setXRange(0, 60)
+            self.preview_plot.addLegend()
+            self.preview_plot.showGrid(x=True, y=True, alpha=0.3)
+
+            # 플롯 라인
+            self.plot_lines = {
+                'ais': self.preview_plot.plot(pen=pg.mkPen('b', width=2), name='AIS'),
+                'radar': self.preview_plot.plot(pen=pg.mkPen('g', width=2), name='Radar'),
+                'arpa': self.preview_plot.plot(pen=pg.mkPen(color=(255, 165, 0), width=2), name='ARPA'),
+                'camera': self.preview_plot.plot(pen=pg.mkPen('r', width=2), name='Camera'),
+            }
+
+            # 수직선 (현재 거리)
+            self.preview_vline = pg.InfiniteLine(pos=30, angle=90, pen=pg.mkPen('k', width=1, style=Qt.PenStyle.DashLine))
+            self.preview_plot.addItem(self.preview_vline)
+
+            layout.addWidget(self.preview_plot)
+        else:
+            no_graph_label = QLabel("pyqtgraph not installed. Install with: pip install pyqtgraph")
+            no_graph_label.setStyleSheet("color: red; font-style: italic;")
+            layout.addWidget(no_graph_label)
+
+        # 현재 거리에서의 확률 표시
+        prob_group = QGroupBox("At Current Distance")
+        prob_layout = QFormLayout(prob_group)
+
+        self.prob_labels = {}
+        for key, name in [('ais', 'P_drop(AIS)'), ('radar', 'P_drop(Radar)'),
+                          ('arpa', 'P_drop(ARPA)'), ('camera', 'P_drop(Camera)')]:
+            label = QLabel("0.0%")
+            label.setMinimumWidth(80)
+            prob_layout.addRow(f"{name}:", label)
+            self.prob_labels[key] = label
+
+        layout.addWidget(prob_group)
+
+        return tab_widget
+
+    def _calculate_dropout_prob(self, distance, config) -> float:
+        """거리 기반 드롭아웃 확률 계산"""
+        d, d0, d1, p0, p1 = distance, config.d0, config.d1, config.p0, config.p1
+
+        if d <= d0:
+            return p0
+        elif d >= d1:
+            return 1.0 if config.full_block_at_d1 else p1
+        else:
+            t = (d - d0) / (d1 - d0) if (d1 - d0) > 0 else 0
+
+            if config.curve_type == "linear":
+                factor = t
+            elif config.curve_type == "logistic":
+                factor = 1 / (1 + math.exp(-10 * (t - 0.5)))
+            else:  # smoothstep
+                factor = t * t * (3 - 2 * t)
+
+            return p0 + (p1 - p0) * factor
+
+    def _get_current_config(self, tab_type: str):
+        """현재 UI 값으로 ReceptionModelConfig 객체 생성"""
+        widgets = self.reception_widgets.get(tab_type, {})
+        if not widgets:
+            return None
+
+        if tab_type == 'arpa':
+            config = ARPATrackConfig(
+                d0=widgets['d0'].value(),
+                d1=widgets['d1'].value(),
+                p0=widgets['p0'].value(),
+                p1=widgets['p1'].value(),
+                full_block_at_d1=widgets['full_block'].isChecked(),
+                curve_type=widgets['curve'].currentText(),
+                burst_enabled=widgets['burst_enabled'].isChecked(),
+                burst_min_sec=widgets['burst_min'].value(),
+                burst_max_sec=widgets['burst_max'].value(),
+                burst_trigger_mult=widgets['burst_mult'].value(),
+                coast_time_sec=widgets['coast'].value() if widgets['coast'] else 5.0,
+                reacquire_prob=widgets['reacquire'].value() if widgets['reacquire'] else 0.8
+            )
+        else:
+            config = ReceptionModelConfig(
+                d0=widgets['d0'].value(),
+                d1=widgets['d1'].value(),
+                p0=widgets['p0'].value(),
+                p1=widgets['p1'].value(),
+                full_block_at_d1=widgets['full_block'].isChecked(),
+                curve_type=widgets['curve'].currentText(),
+                burst_enabled=widgets['burst_enabled'].isChecked(),
+                burst_min_sec=widgets['burst_min'].value(),
+                burst_max_sec=widgets['burst_max'].value(),
+                burst_trigger_mult=widgets['burst_mult'].value()
+            )
+        return config
+
+    def _update_preview(self):
+        """Preview 그래프 업데이트"""
+        if not PYQTGRAPH_AVAILABLE or not hasattr(self, 'preview_plot'):
+            return
+
+        distances = np.linspace(0, 60, 200)
+
+        for tab_type in ['ais', 'radar', 'arpa', 'camera']:
+            config = self._get_current_config(tab_type)
+            if config:
+                probs = [self._calculate_dropout_prob(d, config) * 100 for d in distances]
+                self.plot_lines[tab_type].setData(distances, probs)
+
+        # 현재 거리에서의 확률 업데이트
+        current_dist = self.preview_slider.value()
+        for tab_type in ['ais', 'radar', 'arpa', 'camera']:
+            config = self._get_current_config(tab_type)
+            if config:
+                prob = self._calculate_dropout_prob(current_dist, config) * 100
+                self.prob_labels[tab_type].setText(f"{prob:.1f}%")
+
+    def _on_preview_slider_changed(self, value):
+        """Preview 슬라이더 값 변경"""
+        self.preview_dist_label.setText(f"{value} NM")
+        if PYQTGRAPH_AVAILABLE and hasattr(self, 'preview_vline'):
+            self.preview_vline.setPos(value)
+        self._update_preview()
+
+    def _on_reception_enabled_changed(self):
+        """수신 모델 활성화/비활성화"""
+        enabled = self.chk_reception_enabled.isChecked()
+        self.reception_tabs.setEnabled(enabled)
+        self.combo_preset.setEnabled(enabled)
+        self.btn_reset_preset.setEnabled(enabled)
+
+    def _on_preset_changed(self, index):
+        """프리셋 변경 시 Custom으로 자동 전환하지 않음 (Reset 버튼 사용)"""
+        pass
+
+    def _apply_preset(self):
+        """선택된 프리셋 적용"""
+        preset_names = ["realistic", "stable", "harsh", "custom"]
+        preset_name = preset_names[self.combo_preset.currentIndex()]
+
+        if preset_name == "custom":
+            return
+
+        preset = RECEPTION_PRESETS.get(preset_name, {})
+
+        # AIS
+        if 'ais' in preset and 'ais' in self.reception_widgets:
+            self._apply_preset_to_tab('ais', preset['ais'])
+
+        # Radar
+        if 'radar_detect' in preset and 'radar' in self.reception_widgets:
+            self._apply_preset_to_tab('radar', preset['radar_detect'])
+
+        # ARPA
+        if 'arpa_track' in preset and 'arpa' in self.reception_widgets:
+            self._apply_preset_to_tab('arpa', preset['arpa_track'])
+
+        # Camera
+        if 'camera' in preset and 'camera' in self.reception_widgets:
+            self._apply_preset_to_tab('camera', preset['camera'])
+
+        self._update_preview()
+
+    def _apply_preset_to_tab(self, tab_type: str, preset_data: dict):
+        """프리셋 데이터를 탭에 적용"""
+        widgets = self.reception_widgets.get(tab_type, {})
+        if not widgets:
+            return
+
+        if 'd0' in preset_data:
+            widgets['d0'].setValue(preset_data['d0'])
+        if 'd1' in preset_data:
+            widgets['d1'].setValue(preset_data['d1'])
+        if 'p0' in preset_data:
+            widgets['p0'].setValue(preset_data['p0'])
+        if 'p1' in preset_data:
+            widgets['p1'].setValue(preset_data['p1'])
+        if 'coast_time_sec' in preset_data and widgets.get('coast'):
+            widgets['coast'].setValue(preset_data['coast_time_sec'])
+        if 'reacquire_prob' in preset_data and widgets.get('reacquire'):
+            widgets['reacquire'].setValue(preset_data['reacquire_prob'])
 
     def init_object(self):
         w = QWidget()
@@ -452,10 +856,35 @@ class SettingsDialog(QDialog):
         current_project.settings.traveled_path_thickness = self.spin_travel_th.value()
         for k, s in self.drop_spins.items():
             current_project.settings.dropout_probs[k] = s.value()
-        
+
+        # Reception Model 설정 저장
+        current_project.settings.reception_model_enabled = self.chk_reception_enabled.isChecked()
+        preset_names = ["realistic", "stable", "harsh", "custom"]
+        current_project.settings.reception_preset = preset_names[self.combo_preset.currentIndex()]
+
+        # AIS reception config
+        ais_config = self._get_current_config('ais')
+        if ais_config:
+            current_project.settings.ais_reception = ais_config
+
+        # Radar detect config
+        radar_config = self._get_current_config('radar')
+        if radar_config:
+            current_project.settings.radar_detect = radar_config
+
+        # ARPA track config
+        arpa_config = self._get_current_config('arpa')
+        if arpa_config:
+            current_project.settings.arpa_track = arpa_config
+
+        # Camera reception config
+        camera_config = self._get_current_config('camera')
+        if camera_config:
+            current_project.settings.camera_reception = camera_config
+
         for i, s in enumerate(self.ais_frag_spins):
             current_project.settings.ais_fragment_probs[i] = s.value()
-            
+
         current_project.settings.rtg_zigzag_enabled = self.chk_zigzag.isChecked()
         current_project.settings.rtg_zigzag_turns = self.spin_zigzag_turns.value()
         current_project.settings.rtg_zigzag_angle_limit = self.spin_zigzag_angle.value()

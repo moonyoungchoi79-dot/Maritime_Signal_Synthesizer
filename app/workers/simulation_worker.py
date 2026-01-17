@@ -13,7 +13,8 @@ from PyQt6.QtGui import QPolygonF
 
 from app.core.models.project import current_project
 from app.core.geometry import (
-    haversine_distance, pixel_to_coords, coords_to_pixel, normalize_lon,
+    vincenty_distance,
+    pixel_to_coords, coords_to_pixel, normalize_lon,
     lla_to_ecef, ecef_to_lla, ecef_distance, ecef_move, ecef_heading,
     ecef_interpolate, path_points_to_ecef
 )
@@ -76,12 +77,13 @@ class SimulationWorker(QObject):
             
             x1, y1, z1 = lla_to_ecef(lat1, lon1, 0.0)
             dense_ecef.append((x1, y1, z1))
-            
+            dist_m = vincenty_distance(lat1, lon1, lat2, lon2)
+                    # ...
             # [수정] 도착점 ECEF 변환 코드 추가 (누락되었던 부분)
             x2, y2, z2 = lla_to_ecef(lat2, lon2, 0.0)
             
             # 대권 거리 계산
-            dist_m = haversine_distance(lat1, lon1, lat2, lon2)
+            dist_m = vincenty_distance(lat1, lon1, lat2, lon2)
             
             # 구간이 길면 잘게 쪼개어 대권상에 점을 배치
             if dist_m > max_segment_m:
@@ -138,40 +140,61 @@ class SimulationWorker(QObject):
                 s_rng = random.Random(s_seed)
 
                 # 초기 위치
-                start_px, start_py = s.raw_points[0] # [수정] resampled가 아닌 raw_points 사용
+                start_px, start_py = s.raw_points[0]
                 _, _, start_lat, start_lon = pixel_to_coords(start_px, start_py, mi)
                 x, y, z = lla_to_ecef(start_lat, start_lon, 0.0)
 
-                # [수정] 제어점(raw_points) 기반으로 경로 생성 -> 대권 항로 보장
-                points = s.raw_points 
-                ecef_path, cum_dists, total_len = self._densify_path(points, mi)
+                # [최적화] 랜덤 선박(idx >= 1000)은 경로 생성 없이 Vector Mode로 설정
+                if s.idx >= 1000:
+                    # 랜덤 헤딩 (0 ~ 360도)
+                    init_hdg = s_rng.uniform(0.0, 360.0)
+                    self.dynamic_ships[s.idx] = {
+                        'x': x, 'y': y, 'z': z,
+                        'spd': s.raw_speeds.get(0, 5.0),
+                        'sog': s.raw_speeds.get(0, 5.0),
+                        'hdg': init_hdg,
+                        'dist_traveled': 0.0,
+                        'path_segment_idx': 0,
+                        'ecef_path': [],
+                        'cum_dists': [],
+                        'total_path_len': 0.0,
+                        'following_path': False,  # Vector Mode
+                        'manual_speed': False,
+                        'manual_heading': False,
+                        'mode': None,
+                        'rng': s_rng,
+                        'target_recovery_idx': -1,
+                        'target_dest_ecef': None
+                    }
+                else:
+                    # 일반 선박: 제어점 기반 대권 항로 생성
+                    points = s.raw_points
+                    ecef_path, cum_dists, total_len = self._densify_path(points, mi)
 
-                # 초기 Heading 설정
-                init_hdg = 0.0
-                if len(ecef_path) > 1:
-                    tx, ty, tz = ecef_path[1]
-                    init_hdg = ecef_heading(x, y, z, tx, ty, tz)
+                    # 초기 Heading 설정
+                    init_hdg = 0.0
+                    if len(ecef_path) > 1:
+                        tx, ty, tz = ecef_path[1]
+                        init_hdg = ecef_heading(x, y, z, tx, ty, tz)
 
-                self.dynamic_ships[s.idx] = {
-                    'x': x, 'y': y, 'z': z,
-                    'spd': s.raw_speeds.get(0, 5.0),
-                    'sog': s.raw_speeds.get(0, 5.0),
-                    'hdg': init_hdg,
-                    
-                    'dist_traveled': 0.0,      
-                    'path_segment_idx': 0,     
-                    'ecef_path': ecef_path,
-                    'cum_dists': cum_dists,    
-                    'total_path_len': total_len,
-                    
-                    'following_path': True,
-                    'manual_speed': False,
-                    'manual_heading': False,
-                    'mode': None,              
-                    'rng': s_rng,
-                    'target_recovery_idx': -1,
-                    'target_dest_ecef': None
-                }
+                    self.dynamic_ships[s.idx] = {
+                        'x': x, 'y': y, 'z': z,
+                        'spd': s.raw_speeds.get(0, 5.0),
+                        'sog': s.raw_speeds.get(0, 5.0),
+                        'hdg': init_hdg,
+                        'dist_traveled': 0.0,
+                        'path_segment_idx': 0,
+                        'ecef_path': ecef_path,
+                        'cum_dists': cum_dists,
+                        'total_path_len': total_len,
+                        'following_path': True,
+                        'manual_speed': False,
+                        'manual_heading': False,
+                        'mode': None,
+                        'rng': s_rng,
+                        'target_recovery_idx': -1,
+                        'target_dest_ecef': None
+                    }
             
             self.events = [e for e in self.proj.events if e.enabled]
             self.triggered_events = set()
@@ -290,13 +313,14 @@ class SimulationWorker(QObject):
             points = s.raw_points # [수정] raw_points 사용
             if not points: continue
             
-            ecef_path, cum_dists, total_len = self._densify_path(points, mi)
+            # [수정] 랜덤 선박 최적화: densify_path 호출 제거 및 랜덤 헤딩/Vector Mode 설정
+            # 시작점만 추출하여 ECEF 변환
+            start_px, start_py = points[0]
+            _, _, lat, lon = pixel_to_coords(start_px, start_py, mi)
+            x, y, z = lla_to_ecef(lat, lon, 0.0)
             
-            x, y, z = ecef_path[0]
-            init_hdg = 0.0
-            if len(ecef_path) > 1:
-                tx, ty, tz = ecef_path[1]
-                init_hdg = ecef_heading(x, y, z, tx, ty, tz)
+            # 랜덤 헤딩 생성 (0 ~ 360)
+            init_hdg = s_rng.uniform(0.0, 360.0)
 
             self.dynamic_ships[s.idx] = {
                 'x': x, 'y': y, 'z': z,
@@ -305,10 +329,10 @@ class SimulationWorker(QObject):
                 'hdg': init_hdg,
                 'dist_traveled': 0.0,
                 'path_segment_idx': 0,
-                'ecef_path': ecef_path,
-                'cum_dists': cum_dists,
-                'total_path_len': total_len,
-                'following_path': True,
+                'ecef_path': [],        # 경로는 비워둠
+                'cum_dists': [],
+                'total_path_len': 0.0,
+                'following_path': False, # 경로 추종 끄기 (Vector Mode 작동)
                 'manual_speed': False,
                 'manual_heading': False,
                 'mode': None,
@@ -399,11 +423,46 @@ class SimulationWorker(QObject):
         dist_m = R * theta
         return dist_m / 1852.0
 
+    def _check_prerequisites(self, evt) -> bool:
+        """선행 이벤트 조건 체크"""
+        prereqs = getattr(evt, 'prerequisite_events', [])
+        if not prereqs:
+            return True  # 조건 없으면 통과
+
+        logic = getattr(evt, 'prerequisite_logic', 'AND')
+        results = []
+
+        for cond in prereqs:
+            # cond가 EventCondition 객체 또는 dict일 수 있음
+            if isinstance(cond, dict):
+                event_id = cond.get('event_id', '')
+                mode = cond.get('mode', 'TRIGGERED')
+            else:
+                event_id = cond.event_id
+                mode = cond.mode
+
+            is_triggered = event_id in self.triggered_events
+
+            if mode == "TRIGGERED":
+                results.append(is_triggered)
+            else:  # NOT_TRIGGERED
+                results.append(not is_triggered)
+
+        if logic == "AND":
+            return all(results)
+        else:  # OR
+            return any(results)
+
     def check_events(self, t_current):
         for evt in self.events:
             if evt.id in self.triggered_events: continue
+
+            # 선행 이벤트 조건 체크
+            if not self._check_prerequisites(evt):
+                continue
+
             triggered = False
-            
+
             if evt.trigger_type == "TIME":
                 if t_current >= evt.condition_value: triggered = True
             elif evt.trigger_type == "AREA_ENTER":
@@ -424,6 +483,7 @@ class SimulationWorker(QObject):
                     px, py = coords_to_pixel(lat, lon, self.proj.map_info)
                     poly = QPolygonF([QPointF(x,y) for x,y in area.geometry])
                     if not poly.containsPoint(QPointF(px, py), Qt.FillRule.OddEvenFill): triggered = True
+            
             elif evt.trigger_type in ["CPA_UNDER", "CPA_OVER", "DIST_UNDER", "DIST_OVER"]:
                 tgt_ship = self.proj.get_ship_by_idx(evt.target_ship_idx)
                 ref_idx = evt.reference_ship_idx
@@ -441,39 +501,42 @@ class SimulationWorker(QObject):
                     if evt.trigger_type == "DIST_UNDER" and dist_nm <= evt.condition_value: triggered = True
                     elif evt.trigger_type == "DIST_OVER" and dist_nm >= evt.condition_value: triggered = True
                     elif evt.trigger_type in ["CPA_UNDER", "CPA_OVER"]:
-                        # CPA Logic with Geodesic consideration
-                        # Step A: Estimate T_CPA using vector algebra (valid for finding time)
+                        # [수정] LLA 변환 없이 ECEF 벡터 연산으로 CPA 계산
+                        # 현재 위치 벡터
+                        P_t = np.array([td['x'], td['y'], td['z']])
+                        P_r = np.array([rd['x'], rd['y'], rd['z']])
+                        
+                        # 속도 벡터 (Lat/Lon 없이 현재 상태에서 벡터만 필요하면 아래와 같이 계산 가능하지만, 
+                        # 기존 _calculate_ecef_velocity 사용 유지 시 내부에서 LLA 변환 1회 발생. 
+                        # 성능상 큰 문제 없으나 순수 기하학적으로 최적화하려면 
+                        # ship heading/spd를 이용해 ECEF local frame에서 벡터 합성)
                         t_lat, t_lon, _ = ecef_to_lla(td['x'], td['y'], td['z'])
                         r_lat, r_lon, _ = ecef_to_lla(rd['x'], rd['y'], rd['z'])
                         
                         tvx, tvy, tvz = self._calculate_ecef_velocity(t_lat, t_lon, td.get('sog', td['spd']), td['hdg'])
                         rvx, rvy, rvz = self._calculate_ecef_velocity(r_lat, r_lon, rd.get('sog', rd['spd']), rd['hdg'])
                         
-                        px, py, pz = td['x'] - rd['x'], td['y'] - rd['y'], td['z'] - rd['z']
-                        vx, vy, vz = tvx - rvx, tvy - rvy, tvz - rvz
+                        V_t = np.array([tvx, tvy, tvz])
+                        V_r = np.array([rvx, rvy, rvz])
                         
-                        v_sq = vx*vx + vy*vy + vz*vz
+                        # 상대 위치 및 상대 속도
+                        P_rel = P_t - P_r
+                        V_rel = V_t - V_r
+                        
+                        v_rel_sq = np.dot(V_rel, V_rel)
                         cpa_dist_nm = dist_nm # Default to current
                         
-                        if v_sq > 1e-9:
-                            t_cpa = -(px*vx + py*vy + pz*vz) / v_sq
+                        if v_rel_sq > 1e-9:
+                            # t_cpa (seconds) = - (P_rel . V_rel) / |V_rel|^2
+                            t_cpa = -np.dot(P_rel, V_rel) / v_rel_sq
+                            
                             if t_cpa > 0:
-                                # Step B: Simulate position at T_CPA using Great Circle Move (Correcting for Earth curve)
-                                t_sog = td.get('sog', td['spd'])
-                                r_sog = rd.get('sog', rd['spd'])
+                                # [수정] 미래 위치 예측: 선형 등속 운동 가정 (Linear Projection in ECEF)
+                                # LLA 기반 _move_great_circle_step 제거
+                                P_t_future = P_t + V_t * t_cpa
+                                P_r_future = P_r + V_r * t_cpa
                                 
-                                # Move Target
-                                t_move_m = t_sog * 1852.0 * (t_cpa / 3600.0)
-                                t_new_lat, t_new_lon, _ = self._move_great_circle_step(t_lat, t_lon, td['hdg'], t_move_m)
-                                tx_new, ty_new, tz_new = lla_to_ecef(t_new_lat, t_new_lon, 0.0)
-                                
-                                # Move Ref
-                                r_move_m = r_sog * 1852.0 * (t_cpa / 3600.0)
-                                r_new_lat, r_new_lon, _ = self._move_great_circle_step(r_lat, r_lon, rd['hdg'], r_move_m)
-                                rx_new, ry_new, rz_new = lla_to_ecef(r_new_lat, r_new_lon, 0.0)
-                                
-                                # Step C: Measure Distance at predicted positions (Chord -> Arc)
-                                future_dist_chord = ecef_distance(tx_new, ty_new, tz_new, rx_new, ry_new, rz_new)
+                                future_dist_chord = np.linalg.norm(P_t_future - P_r_future)
                                 cpa_dist_nm = self._ecef_dist_to_geodesic_nm(future_dist_chord)
                         
                         if evt.trigger_type == "CPA_UNDER" and cpa_dist_nm <= evt.condition_value: triggered = True
@@ -745,6 +808,50 @@ class SimulationWorker(QObject):
         prob = self.proj.settings.dropout_probs.get(stype, 0.1)
         return random.random() < prob
 
+    def calculate_dropout_probability(self, distance_nm: float, config) -> float:
+        """거리 기반 드롭아웃 확률 계산"""
+        if not config.enabled:
+            return 0.0
+
+        d, d0, d1, p0, p1 = distance_nm, config.d0, config.d1, config.p0, config.p1
+
+        if d <= d0:
+            return p0  # 안정 구간
+        elif d >= d1:
+            return 1.0 if config.full_block_at_d1 else p1  # 완전 차단 or p1
+        else:
+            # d0 ~ d1 구간: 곡선 보간
+            t = (d - d0) / (d1 - d0)  # 0 ~ 1 정규화
+
+            if config.curve_type == "linear":
+                factor = t
+            elif config.curve_type == "logistic":
+                factor = 1 / (1 + math.exp(-10 * (t - 0.5)))
+            else:  # smoothstep (default)
+                factor = t * t * (3 - 2 * t)
+
+            return p0 + (p1 - p0) * factor
+
+    def check_dropout_distance_based(self, stype: str, distance_nm: float) -> bool:
+        """거리 기반 드롭아웃 판정"""
+        if not self.proj.settings.reception_model_enabled:
+            # 기존 고정 확률 방식 fallback
+            return self.check_dropout(stype)
+
+        if stype == "AIVDM":
+            config = self.proj.settings.ais_reception
+        elif stype == "RATTM":
+            config = self.proj.settings.radar_detect
+        elif stype == "ARPA":
+            config = self.proj.settings.arpa_track
+        elif stype == "Camera":
+            config = self.proj.settings.camera_reception
+        else:
+            return False
+
+        prob = self.calculate_dropout_probability(distance_nm, config)
+        return random.random() < prob
+
     def get_jittered_time(self, base_ts):
         if self.proj.settings.jitter_enabled:
             offset = random.choice([-2, -1, 0, 1, 2])
@@ -754,19 +861,30 @@ class SimulationWorker(QObject):
     def generate_ais_radar_group(self, own, tgt, state, ts_val):
         jitter_ts = self.get_jittered_time(ts_val)
         base = self.make_base_row(own, tgt, state, jitter_ts)
+
+        # 두 선박 간 거리 계산 (거리 기반 수신 모델용)
+        own_dyn = self.dynamic_ships.get(own.idx)
+        tgt_dyn = self.dynamic_ships.get(tgt.idx)
+        if own_dyn and tgt_dyn:
+            dist_m = ecef_distance(own_dyn['x'], own_dyn['y'], own_dyn['z'],
+                                   tgt_dyn['x'], tgt_dyn['y'], tgt_dyn['z'])
+            dist_nm = self._ecef_dist_to_geodesic_nm(dist_m)
+        else:
+            dist_nm = 0.0
+
         stype = "AIVDM"
         ship = self.proj.get_ship_by_idx(tgt.idx)
         if ship:
-            if ship.signals_enabled.get(stype, True): 
+            if ship.signals_enabled.get(stype, True):
                 interval = ship.signal_intervals.get(stype, 1.0)
                 current_sim_time = (jitter_ts - self.proj.start_time).total_seconds()
                 last_time = self.last_emission_times.get((ship.idx, stype), -float('inf'))
-                if (current_sim_time + 1e-9) >= (last_time + interval): 
-                    if not self.check_dropout(stype): 
+                if (current_sim_time + 1e-9) >= (last_time + interval):
+                    if not self.check_dropout_distance_based(stype, dist_nm):
                         ais_msgs = self.gen_ais_multi(base, state, "VDM", tgt.mmsi)
-                        for msg in ais_msgs: self.send_nmea(msg, jitter_ts) 
-                        self.last_emission_times[(ship.idx, stype)] = current_sim_time 
-        self.try_emit(self.gen_ttm(base, state), "RATTM", jitter_ts, tgt.idx)
+                        for msg in ais_msgs: self.send_nmea(msg, jitter_ts)
+                        self.last_emission_times[(ship.idx, stype)] = current_sim_time
+        self.try_emit_distance_based(self.gen_ttm(base, state), "RATTM", jitter_ts, tgt.idx, dist_nm)
 
     def try_emit(self, raw, stype, ts_obj, ship_idx):
         ship = self.proj.get_ship_by_idx(ship_idx)
@@ -778,7 +896,21 @@ class SimulationWorker(QObject):
         if (current_sim_time + 1e-9) < (last_time + interval): return
         if not raw: return
         self.last_emission_times[(ship_idx, stype)] = current_sim_time
-        if self.check_dropout(stype): return 
+        if self.check_dropout(stype): return
+        self.send_nmea(raw, ts_obj)
+
+    def try_emit_distance_based(self, raw, stype, ts_obj, ship_idx, dist_nm):
+        """거리 기반 드롭아웃을 적용하는 신호 방출 함수"""
+        ship = self.proj.get_ship_by_idx(ship_idx)
+        if not ship: return
+        if not ship.signals_enabled.get(stype, True): return
+        interval = ship.signal_intervals.get(stype, 1.0)
+        current_sim_time = (ts_obj - self.proj.start_time).total_seconds()
+        last_time = self.last_emission_times.get((ship_idx, stype), -float('inf'))
+        if (current_sim_time + 1e-9) < (last_time + interval): return
+        if not raw: return
+        self.last_emission_times[(ship_idx, stype)] = current_sim_time
+        if self.check_dropout_distance_based(stype, dist_nm): return
         self.send_nmea(raw, ts_obj)
 
     def make_base_row(self, rcv, tgt, state, ts_val):
