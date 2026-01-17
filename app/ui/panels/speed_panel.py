@@ -2,12 +2,13 @@ import numpy as np
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QPushButton, QLabel, QTextEdit, 
-    QDoubleSpinBox, QTableWidget, QHeaderView, QTableWidgetItem, QAbstractItemView, QComboBox
+    QDoubleSpinBox, QTableWidget, QHeaderView, QTableWidgetItem, QAbstractItemView, QComboBox, QHBoxLayout
 )
 from PyQt6.QtCore import (
     pyqtSignal, Qt
 )
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas, NavigationToolbar2QT as NavigationToolbar
+from matplotlib.backends.backend_qt import NavigationToolbar2QT as NavigationToolbar
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import matplotlib.ticker as ticker
 from app.core.models.project import current_project

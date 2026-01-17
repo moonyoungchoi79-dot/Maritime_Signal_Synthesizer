@@ -70,14 +70,14 @@ class ColoredTabBar(QTabBar):
     def paintEvent(self, event):
         painter = QPainter(self)
         option = QStyleOptionTab()
-        
+
         s = current_project.settings
         mode = s.theme_mode
         is_dark = False
         if mode == "Dark": is_dark = True
         elif mode == "Light": is_dark = False
         else: # System
-            if QApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark: is_dark = True
+            if QApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark: is_dark = True  # type: ignore
 
         bg_color = QColor(Qt.GlobalColor.black) if is_dark else QColor(Qt.GlobalColor.white)
         text_color = QColor(Qt.GlobalColor.white) if is_dark else QColor(Qt.GlobalColor.black)
@@ -145,7 +145,7 @@ class MainWindow(QMainWindow):
         if mode == "Dark": is_dark = True
         elif mode == "Light": is_dark = False
         else: # System
-            if QApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark: is_dark = True
+            if QApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark: is_dark = True  # type: ignore
 
         p = QApplication.palette()
         
@@ -186,8 +186,8 @@ class MainWindow(QMainWindow):
         if mode == "Dark": is_dark = True
         elif mode == "Light": is_dark = False
         else: # System
-            if QApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark: is_dark = True
-        
+            if QApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark: is_dark = True  # type: ignore
+
         bg_color = "#353535" if is_dark else "#ffffff"
         text_color = "#ffffff" if is_dark else "black"
         input_bg = "#252525" if is_dark else "#ffffff"
@@ -218,7 +218,7 @@ class MainWindow(QMainWindow):
                 border-radius: 2px;
             }}
             QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
-                border: 2px solid {s.select_color};
+                border: 2px solid {s.select_color};  # type: ignore
                 padding: 1px;
             }}
             
@@ -229,12 +229,12 @@ class MainWindow(QMainWindow):
                 padding: 4px; 
                 border-radius: 4px;
             }}
-            QPushButton:hover {{ 
-                background-color: {input_bg}; 
-                border: 2px solid {s.select_color}; 
+            QPushButton:hover {{
+                background-color: {input_bg};
+                border: 2px solid {s.select_color};  # type: ignore
                 padding: 3px;
             }}
-            QPushButton:pressed {{ background-color: {s.select_color}; color: white; }}
+            QPushButton:pressed {{ background-color: {s.select_color}; color: white; }}  # type: ignore
             QPushButton:disabled {{ 
                 background-color: {disabled_bg}; 
                 color: {disabled_text}; 
@@ -256,17 +256,17 @@ class MainWindow(QMainWindow):
                 padding: 0 3px 0 3px;
             }}
             QPushButton#spdBtn {{
-                background-color: {s.btn_speed_color}; color: white; border-radius: 8px;
+                background-color: {s.btn_speed_color}; color: white; border-radius: 8px;  # type: ignore
                 max-height: 24px; padding: 2px 10px; }}
             QPushButton#spdBtn:hover {{ opacity: 0.8; }}
             QPushButton#spdBtn:disabled {{ background-color: {disabled_bg}; color: {disabled_text}; border: 1px solid {disabled_border}; }}
             QPushButton#simBtn {{
-                background-color: {s.btn_sim_color}; color: white; border-radius: 8px;
+                background-color: {s.btn_sim_color}; color: white; border-radius: 8px;  # type: ignore
                 max-height: 24px; padding: 2px 10px; }}
             QPushButton#simBtn:hover {{ opacity: 0.8; }}
             QPushButton#simBtn:disabled {{ background-color: {disabled_bg}; color: {disabled_text}; border: 1px solid {disabled_border}; }}
             QPushButton#rtgBtn {{
-                background-color: {s.btn_rtg_color}; color: white; border-radius: 8px;
+                background-color: {s.btn_rtg_color}; color: white; border-radius: 8px;  # type: ignore
                 max-height: 24px; padding: 2px 10px; }}
             QPushButton#rtgBtn:hover {{ opacity: 0.8; }}
             QPushButton#rtgBtn:disabled {{ background-color: {disabled_bg}; color: {disabled_text}; border: 1px solid {disabled_border}; }}
@@ -336,7 +336,7 @@ class MainWindow(QMainWindow):
         self.tabs.setTabPosition(QTabWidget.TabPosition.South)
         self.tabs.setTabBar(ColoredTabBar(self.tabs))
         self.tabs.setDocumentMode(True)
-        self.tabs.tabBar().setExpanding(False)
+        self.tabs.tabBar().setExpanding(False)  # type: ignore
         
         # Map Editor Tab
         self.map_editor_widget = QWidget()
@@ -367,7 +367,7 @@ class MainWindow(QMainWindow):
         
         tb.addWidget(QLabel("Initialize: "))
         a_sel = tb.addAction("Select")
-        a_sel.triggered.connect(lambda: self.set_map_mode("SELECT"))
+        a_sel.triggered.connect(lambda: self.set_map_mode("SELECT"))  # type: ignore
         tb.addSeparator()
         
         tb.addWidget(QLabel("Object:"))
@@ -381,10 +381,10 @@ class MainWindow(QMainWindow):
         tb.addAction("Add", self.req_add_point)
         tb.addAction("Move", lambda: self.set_map_mode("MOVE_POINT"))
         tb.addAction("Delete", lambda: self.set_map_mode("DELETE_POINT"))
-        
+
         a_del_chk = tb.addAction("Delete Checked")
-        a_del_chk.triggered.connect(self.delete_checked_points)
-        a_del_chk.setToolTip("Delete all points checked in the table")
+        a_del_chk.triggered.connect(self.delete_checked_points)  # type: ignore
+        a_del_chk.setToolTip("Delete all points checked in the table")  # type: ignore
         
         self.scene = QGraphicsScene()
         self.view = MapView(self.scene, self)
@@ -409,7 +409,7 @@ class MainWindow(QMainWindow):
         self.data_table = QTableWidget()
         self.data_table.itemChanged.connect(self.on_table_changed)
         h = self.data_table.horizontalHeader()
-        h.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        h.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)  # type: ignore
         right_v.addWidget(self.data_table)
         
         
@@ -463,22 +463,23 @@ class MainWindow(QMainWindow):
         # Sorting Rules:
         # 1) Own Ship (Index 0 or settings.own_ship_idx)
         # 2) Manual Targets (idx < 1000)
-        # 3) Random Targets (idx >= 1000)
+        # 3) Random Targets (idx >= 1000) -> [수정] Path 탭에서는 제외함
         
         own_idx = current_project.settings.own_ship_idx
         own_ship = None
         manual_targets = []
-        random_targets = []
+        # random_targets = [] # [수정] 제거
         
         for s in current_project.ships:
             if s.idx == own_idx: own_ship = s
-            elif s.idx >= 1000: random_targets.append(s)
+            elif s.idx >= 1000: continue # [수정] 랜덤 타겟은 콤보박스에 추가하지 않음
             else: manual_targets.append(s)
             
         manual_targets.sort(key=lambda x: x.idx)
-        random_targets.sort(key=lambda x: x.idx)
+        # random_targets.sort(key=lambda x: x.idx) # [수정] 제거
         
-        sorted_ships = ([own_ship] if own_ship else []) + manual_targets + random_targets
+        # [수정] sorted_ships 구성에서 random_targets 제거
+        sorted_ships = ([own_ship] if own_ship else []) + manual_targets
         
         for s in sorted_ships:
             tag = "OwnShip" if s.idx == own_idx else f"Target{s.idx}"
@@ -519,8 +520,8 @@ class MainWindow(QMainWindow):
         self.data_table.blockSignals(True)
         self.data_table.setColumnCount(6)
         self.data_table.setHorizontalHeaderLabels(["chk", "idx", "Lat", "Lon", "Speed(kn)", "MMSI"])
-        self.data_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.data_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.data_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)  # type: ignore
+        self.data_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)  # type: ignore
         self.data_table.setRowCount(len(ship.raw_points))
         
         mi = current_project.map_info
@@ -554,7 +555,7 @@ class MainWindow(QMainWindow):
         self.data_table.blockSignals(True)
         self.data_table.setColumnCount(3)
         self.data_table.setHorizontalHeaderLabels(["Vtx", "Lat", "Lon"])
-        self.data_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.data_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)  # type: ignore
         self.data_table.setRowCount(len(st.geometry))
         
         mi = current_project.map_info
@@ -665,6 +666,9 @@ class MainWindow(QMainWindow):
         settings = current_project.settings
         
         for s in current_project.ships:
+            # [수정] 랜덤 생성 선박(ID >= 1000)은 Path 화면(Map Editor)에 표시하지 않음
+            if s.idx >= 1000: continue
+
             is_sel = ("[Ship]" in sel_txt and s.idx == sel_id)
             if not s.raw_points: continue
             pts = s.raw_points
@@ -677,7 +681,7 @@ class MainWindow(QMainWindow):
                 w = settings.path_thickness
                 
                 if s.idx == settings.own_ship_idx: c_hex = settings.own_color
-                elif s.idx >= 1000: c_hex = settings.random_color
+                # elif s.idx >= 1000: c_hex = settings.random_color # [주석] 위에서 필터링하므로 필요 없음
                 else: c_hex = settings.target_color
                 
                 if is_sel:
@@ -691,7 +695,7 @@ class MainWindow(QMainWindow):
                 self.scene.addItem(path)
 
             if s.idx == settings.own_ship_idx: c_hex = settings.own_color
-            elif s.idx >= 1000: c_hex = settings.random_color
+            # elif s.idx >= 1000: c_hex = settings.random_color
             else: c_hex = settings.target_color
             
             if is_sel: c_hex = settings.select_color
@@ -718,15 +722,8 @@ class MainWindow(QMainWindow):
                 el.setZValue(2)
                 self.scene.addItem(el)
                 
-                if settings.show_speed_notes and s.is_generated:
-                    spd = s.raw_speeds.get(i, 5.0)
-                    txt = QGraphicsTextItem(f"{spd:.1f} kn")
-                    txt.setDefaultTextColor(Qt.GlobalColor.black)
-                    txt.setFont(QFont("Arial", 8))
-                    txt.setPos(px + 10, py + 10)
-                    txt.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
-                    txt.setZValue(3)
-                    self.scene.addItem(txt)
+                # [수정] 랜덤 선박은 여기서 그려지지 않으므로 Speed Note 체크 로직도 단순화됨
+                # if settings.show_speed_notes and s.is_generated: ... (삭제됨)
 
             if s.raw_points:
                 start_pt = s.raw_points[0]
@@ -1171,7 +1168,7 @@ class MainWindow(QMainWindow):
                                     is_relative_to_end=e_data.get("is_relative_to_end", False),
                                     reference_ship_idx=e_data.get("reference_ship_idx", -1)
                                 )
-                                evt.action_option = e_data.get("action_option", "")
+                                evt.action_option = e_data.get("action_option", "")  # type: ignore
                                 p.events.append(evt)
                         except: pass
             
@@ -1190,7 +1187,7 @@ class MainWindow(QMainWindow):
                         is_relative_to_end=e_data.get("is_relative_to_end", False),
                         reference_ship_idx=e_data.get("reference_ship_idx", -1)
                     )
-                    evt.action_option = e_data.get("action_option", "")
+                    evt.action_option = e_data.get("action_option", "")  # type: ignore
                     p.events.append(evt)
 
             # Load Scenarios from Project/Scenario folder
@@ -1220,7 +1217,7 @@ class MainWindow(QMainWindow):
                                     existing.reference_ship_idx = s_evt.reference_ship_idx
                                     existing.action_value = s_evt.action_value
                                     existing.is_relative_to_end = s_evt.is_relative_to_end
-                                    existing.action_option = getattr(s_evt, 'action_option', "")
+                                    existing.action_option = getattr(s_evt, 'action_option', "")  # type: ignore
                         except: pass
             
             self.update_ui_state(True)
@@ -1309,7 +1306,7 @@ class MainWindow(QMainWindow):
                 "action_value": e.action_value,
                 "is_relative_to_end": e.is_relative_to_end,
                 "reference_ship_idx": e.reference_ship_idx,
-                "action_option": getattr(e, 'action_option', "")
+                "action_option": getattr(e, 'action_option', "")  # type: ignore
             }
             
             # Save to Event/{name}.json
@@ -1437,7 +1434,7 @@ class MainWindow(QMainWindow):
         if mode == "Dark": is_dark = True
         elif mode == "Light": is_dark = False
         else:
-            if QApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark: is_dark = True
+            if QApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark: is_dark = True  # type: ignore
         input_bg = "#252525" if is_dark else "#ffffff" # Used for map bg logic if needed
         sel_color = input_bg # Default
         

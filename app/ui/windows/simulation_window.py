@@ -26,6 +26,7 @@ from PyQt6.QtGui import (
     QColor, QPen, QBrush, QPainterPath, QPolygonF, QFont
 )
 
+from app.ui.windows.main_window import MainWindow
 from app.core.constants import CSV_HEADER
 from app.core.models.project import current_project, ShipData
 from app.core.utils import sanitize_filename
