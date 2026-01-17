@@ -1,6 +1,7 @@
 import json
 import uuid
 from app.core.models.project import EventTrigger
+from app.core.models.event import EventCondition
 
 class Scenario:
     def __init__(self):
@@ -21,6 +22,15 @@ class Scenario:
         }
 
     def _event_to_dict(self, e):
+        # 조건부 이벤트 직렬화
+        prereqs = getattr(e, 'prerequisite_events', [])
+        prereq_list = []
+        for cond in prereqs:
+            if isinstance(cond, dict):
+                prereq_list.append({"event_id": cond.get('event_id', ''), "mode": cond.get('mode', 'TRIGGERED')})
+            else:
+                prereq_list.append({"event_id": cond.event_id, "mode": cond.mode})
+
         return {
             "id": e.id,
             "name": e.name,
@@ -32,7 +42,9 @@ class Scenario:
             "reference_ship_idx": getattr(e, 'reference_ship_idx', -1),
             "action_value": e.action_value,
             "is_relative_to_end": getattr(e, 'is_relative_to_end', False),
-            "action_option": getattr(e, 'action_option', "")
+            "action_option": getattr(e, 'action_option', ""),
+            "prerequisite_events": prereq_list,
+            "prerequisite_logic": getattr(e, 'prerequisite_logic', 'AND')
         }
 
     def save_to_file(self, filepath):
@@ -68,6 +80,14 @@ class Scenario:
                 reference_ship_idx=e_data.get("reference_ship_idx", -1)
             )
             evt.action_option = e_data.get("action_option", "")
+
+            # 조건부 이벤트 로드
+            evt.prerequisite_logic = e_data.get("prerequisite_logic", "AND")
+            evt.prerequisite_events = [
+                EventCondition(event_id=c['event_id'], mode=c['mode'])
+                for c in e_data.get("prerequisite_events", [])
+            ]
+
             scen.events.append(evt)
             
         return scen

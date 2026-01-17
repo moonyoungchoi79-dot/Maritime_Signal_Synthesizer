@@ -468,20 +468,37 @@ class EventScriptPanel(QWidget):
         evt.target_ship_idx = self.combo_target.currentData()
         evt.reference_ship_idx = self.combo_ref.currentData()
         evt.action_value = self.spin_action_val.value()
-        
-        # Regenerate ID to force re-evaluation in SimulationWorker
-        # This ensures that if the event was previously triggered, it can trigger again
-        # with the new parameters.
-        new_id = str(uuid.uuid4())
-        evt.id = new_id
-        self.current_event_id = new_id
-        
+
+        # ID 유지 - triggered_events에서 제거하여 재평가 가능하게 함
+        # (ID 재생성 시 prerequisite_events 참조가 깨지는 문제 방지)
+        main_win = self.window()
+        if hasattr(main_win, 'worker') and main_win.worker:
+            main_win.worker.reset_triggered_event(evt.id)
+
+        # Scenario의 이벤트도 동기화 (양방향 동기화)
+        from app.core.state import loaded_scenarios
+        for scen in loaded_scenarios:
+            for scen_evt in scen.events:
+                if scen_evt.id == evt.id:
+                    scen_evt.name = evt.name
+                    scen_evt.enabled = evt.enabled
+                    scen_evt.trigger_type = evt.trigger_type
+                    scen_evt.condition_value = evt.condition_value
+                    scen_evt.action_type = evt.action_type
+                    scen_evt.action_option = evt.action_option
+                    scen_evt.target_ship_idx = evt.target_ship_idx
+                    scen_evt.reference_ship_idx = evt.reference_ship_idx
+                    scen_evt.action_value = evt.action_value
+                    scen_evt.is_relative_to_end = getattr(evt, 'is_relative_to_end', False)
+                    # 조건부 이벤트도 동기화
+                    scen_evt.prerequisite_logic = getattr(evt, 'prerequisite_logic', 'AND')
+                    scen_evt.prerequisite_events = getattr(evt, 'prerequisite_events', [])
+
         self.refresh_table()
         # Restore selection
-        self.select_event_by_id(new_id)
-        
+        self.select_event_by_id(evt.id)
+
         # Sync with Scenario Panel if available
-        main_win = self.window()
         if hasattr(main_win, 'scenario_panel') and isinstance(main_win.scenario_panel, ScenarioPanel):
             main_win.scenario_panel.refresh_ui()
         if hasattr(main_win, 'data_changed'):

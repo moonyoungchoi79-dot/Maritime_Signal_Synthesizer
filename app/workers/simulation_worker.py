@@ -50,9 +50,13 @@ class SimulationWorker(QObject):
         self.current_time = 0.0
         self.active_ships = []
         self.triggered_events = set()
-        self.dynamic_ships = {} 
+        self.dynamic_ships = {}
         self.events = []
         self.max_steps = 0
+
+    def reset_triggered_event(self, event_id: str):
+        """이벤트 수정 시 triggered_events에서 해당 ID를 제거하여 재평가 가능하게 함"""
+        self.triggered_events.discard(event_id)
 
     def _densify_path(self, raw_points, mi, max_segment_m=100.0):
         """

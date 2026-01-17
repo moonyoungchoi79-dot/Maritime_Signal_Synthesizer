@@ -12,6 +12,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor
 
 from app.core.models.project import current_project, EventTrigger
+from app.core.models.event import EventCondition
 from app.core.models.scenario import Scenario
 from app.ui.widgets.time_input_widget import TimeInputWidget
 import app.core.state as app_state
@@ -144,43 +145,56 @@ class ScenarioPanel(QWidget):
         
         self.right_layout.addWidget(event_group)
         
-        # 5. Event Editor
-        self.editor_group = QGroupBox("Selected Event Details")
+        # 5. Event Editor (기본 정보는 읽기 전용, 조건부 이벤트만 편집)
+        self.editor_group = QGroupBox("Selected Event Details (Edit event details in Event tab)")
         self.editor_group.setEnabled(False)
         form = QFormLayout(self.editor_group)
         
         self.edit_evt_name = QLineEdit()
+        self.edit_evt_name.setReadOnly(True)  # 읽기 전용 (Event 탭에서 수정)
+        self.edit_evt_name.setStyleSheet("background-color: #f0f0f0;")
         self.chk_evt_enabled = QCheckBox("Enabled")
-        
+        self.chk_evt_enabled.setEnabled(False)  # 읽기 전용 (Event 탭에서 수정)
+
         self.combo_trigger = QComboBox()
         self.combo_trigger.addItems(["TIME", "AREA_ENTER", "AREA_LEAVE", "CPA_UNDER", "CPA_OVER", "DIST_UNDER", "DIST_OVER"])
         self.combo_trigger.currentIndexChanged.connect(self.update_editor_ui_state)
-        
+        self.combo_trigger.setEnabled(False)  # 읽기 전용
+
         self.combo_time_ref = QComboBox()
         self.combo_time_ref.addItems(["Elapsed Time (Since Start)", "Remaining Time (Until End)"])
         self.combo_time_ref.currentIndexChanged.connect(self.on_time_ref_changed)
-        
+        self.combo_time_ref.setEnabled(False)  # 읽기 전용
+
         self.time_input = TimeInputWidget()
-        
+        self.time_input.setEnabled(False)  # 읽기 전용
+
         self.spin_cpa = QDoubleSpinBox()
         self.spin_cpa.setRange(0, 10000000)
         self.spin_cpa.setSuffix(" NM")
-        
+        self.spin_cpa.setReadOnly(True)  # 읽기 전용
+
         self.combo_ref = QComboBox()
+        self.combo_ref.setEnabled(False)  # 읽기 전용
         self.combo_area = QComboBox()
-        
+        self.combo_area.setEnabled(False)  # 읽기 전용
+
         self.combo_action = QComboBox()
         self.combo_action.addItems(["STOP", "CHANGE_SPEED", "CHANGE_HEADING", "MANEUVER"])
         self.combo_action.currentIndexChanged.connect(self.update_editor_ui_state)
-        
+        self.combo_action.setEnabled(False)  # 읽기 전용
+
         self.combo_action_option = QComboBox()
         self.combo_action_option.addItems(["ReturnToOriginalPath_ShortestDistance", "ChangeDestination_ToOriginalFinal"])
-        
+        self.combo_action_option.setEnabled(False)  # 읽기 전용
+
         self.combo_target = QComboBox()
-        
+        self.combo_target.setEnabled(False)  # 읽기 전용
+
         self.spin_action_val = QDoubleSpinBox()
         self.spin_action_val.setRange(0, 1000)
-        
+        self.spin_action_val.setReadOnly(True)  # 읽기 전용
+
         self.lbl_act_val = QLabel("Value:")
         
         self._build_editor_form(form)
@@ -210,27 +224,57 @@ class ScenarioPanel(QWidget):
         form.addRow("Action Option:", self.combo_action_option)
         form.addRow("Target Ship:", self.combo_target)
         form.addRow(self.lbl_act_val, self.spin_action_val)
-        
-        btn_save_evt = QPushButton("Apply Changes")
+
+        # 조건부 이벤트 UI
+        prereq_widget = QWidget()
+        prereq_layout = QVBoxLayout(prereq_widget)
+        prereq_layout.setContentsMargins(0, 0, 0, 0)
+
+        # 논리 연산자 선택
+        logic_layout = QHBoxLayout()
+        logic_label = QLabel("Logic:")
+        self.combo_prereq_logic = QComboBox()
+        self.combo_prereq_logic.addItems(["AND (모든 조건 충족)", "OR (하나라도 충족)"])
+        self.combo_prereq_logic.currentIndexChanged.connect(self.mark_dirty)
+        logic_layout.addWidget(logic_label)
+        logic_layout.addWidget(self.combo_prereq_logic)
+        logic_layout.addStretch()
+        prereq_layout.addLayout(logic_layout)
+
+        # 조건 추가 행
+        add_layout = QHBoxLayout()
+        self.combo_prereq_event = QComboBox()
+        self.combo_prereq_event.setMinimumWidth(150)
+        add_layout.addWidget(self.combo_prereq_event)
+
+        self.combo_prereq_mode = QComboBox()
+        self.combo_prereq_mode.addItems(["TRIGGERED (발동됨)", "NOT_TRIGGERED (발동 안됨)"])
+        add_layout.addWidget(self.combo_prereq_mode)
+
+        btn_add_prereq = QPushButton("+")
+        btn_add_prereq.setFixedWidth(30)
+        btn_add_prereq.clicked.connect(self._add_prerequisite)
+        add_layout.addWidget(btn_add_prereq)
+        prereq_layout.addLayout(add_layout)
+
+        # 조건 목록
+        self.list_prereqs = QListWidget()
+        self.list_prereqs.setMaximumHeight(60)
+        prereq_layout.addWidget(self.list_prereqs)
+
+        # 삭제 버튼
+        btn_remove_prereq = QPushButton("Remove Selected")
+        btn_remove_prereq.clicked.connect(self._remove_prerequisite)
+        prereq_layout.addWidget(btn_remove_prereq)
+
+        form.addRow("Prerequisites:", prereq_widget)
+
+        btn_save_evt = QPushButton("Apply Prerequisite Changes")
         btn_save_evt.clicked.connect(self.save_event_changes)
         form.addRow(btn_save_evt)
         
-        # Connect change signals for dirty check
-        self.edit_evt_name.textChanged.connect(self.mark_dirty)
-        self.chk_evt_enabled.toggled.connect(self.mark_dirty)
-        self.combo_trigger.currentIndexChanged.connect(self.mark_dirty)
-        self.combo_time_ref.currentIndexChanged.connect(self.mark_dirty)
-        self.spin_cpa.valueChanged.connect(self.mark_dirty)
-        self.combo_ref.currentIndexChanged.connect(self.mark_dirty)
-        self.combo_area.currentIndexChanged.connect(self.mark_dirty)
-        self.combo_action.currentIndexChanged.connect(self.mark_dirty)
-        self.combo_action_option.currentIndexChanged.connect(self.mark_dirty)
-        self.combo_target.currentIndexChanged.connect(self.mark_dirty)
-        self.spin_action_val.valueChanged.connect(self.mark_dirty)
-        
-        # Try to connect TimeInputWidget internal spinboxes
-        for sb in self.time_input.findChildren(QSpinBox):
-            sb.valueChanged.connect(self.mark_dirty)
+        # 기본 이벤트 정보는 읽기 전용 - dirty 체크 불필요
+        # 조건부 이벤트 변경만 dirty 체크 (combo_prereq_logic은 위에서 연결됨)
 
     def refresh_ui(self):
         # Refresh List
@@ -615,10 +659,25 @@ class ScenarioPanel(QWidget):
             return
             
         evt = app_state.current_scenario.events[row]
+
+        # Project Event에서 최신 데이터 동기화 (양방향 실시간 동기화)
+        proj_evt = next((e for e in current_project.events if e.id == evt.id), None)
+        if proj_evt:
+            evt.name = proj_evt.name
+            evt.enabled = proj_evt.enabled
+            evt.trigger_type = proj_evt.trigger_type
+            evt.condition_value = proj_evt.condition_value
+            evt.action_type = proj_evt.action_type
+            evt.action_option = getattr(proj_evt, 'action_option', '')
+            evt.target_ship_idx = proj_evt.target_ship_idx
+            evt.reference_ship_idx = getattr(proj_evt, 'reference_ship_idx', -1)
+            evt.action_value = proj_evt.action_value
+            evt.is_relative_to_end = getattr(proj_evt, 'is_relative_to_end', False)
+
         self.loading_event = True
         self.last_selected_row = row
         self.editor_group.setEnabled(True)
-        
+
         self.edit_evt_name.setText(evt.name)
         self.chk_evt_enabled.setChecked(evt.enabled)
         self.combo_trigger.setCurrentText(evt.trigger_type)
@@ -654,6 +713,35 @@ class ScenarioPanel(QWidget):
         if idx >= 0: self.combo_ref.setCurrentIndex(idx)
         
         self.spin_action_val.setValue(evt.action_value)
+
+        # 조건부 이벤트 로드
+        self._populate_prereq_event_combo(evt.id)
+        logic = getattr(evt, 'prerequisite_logic', 'AND')
+        self.combo_prereq_logic.setCurrentIndex(0 if logic == "AND" else 1)
+
+        self.list_prereqs.clear()
+        prereqs = getattr(evt, 'prerequisite_events', [])
+        for cond in prereqs:
+            if isinstance(cond, dict):
+                event_id = cond.get('event_id', '')
+                mode = cond.get('mode', 'TRIGGERED')
+            else:
+                event_id = cond.event_id
+                mode = cond.mode
+
+            # 이벤트 이름 찾기
+            event_name = event_id
+            for e in app_state.current_scenario.events:
+                if e.id == event_id:
+                    event_name = e.name
+                    break
+
+            mode_text = "발동됨" if mode == "TRIGGERED" else "발동 안됨"
+            item = QListWidgetItem(f"{event_name} → {mode_text}")
+            item.setData(Qt.ItemDataRole.UserRole, event_id)
+            item.setData(Qt.ItemDataRole.UserRole + 1, mode)
+            self.list_prereqs.addItem(item)
+
         self.update_editor_ui_state()
         self.loading_event = False
 
@@ -721,59 +809,39 @@ class ScenarioPanel(QWidget):
             row = self.list_scen_events.row(items[0])
         else:
             row = target_row
-        
+
         evt = app_state.current_scenario.events[row]
-        old_id = evt.id # Capture old ID
-        evt.name = self.edit_evt_name.text()
-        evt.enabled = self.chk_evt_enabled.isChecked()
-        evt.trigger_type = self.combo_trigger.currentText()
-        
-        if evt.trigger_type == "TIME":
-            evt.is_relative_to_end = (self.combo_time_ref.currentIndex() == 1)
-            input_val = float(self.time_input.get_seconds())
-            if evt.is_relative_to_end:
-                dur = self.get_current_ship_duration()
-                evt.condition_value = max(0, dur - input_val)
-            else:
-                evt.condition_value = input_val
-        elif evt.trigger_type in ["CPA_UNDER", "CPA_OVER", "DIST_UNDER", "DIST_OVER"]:
-            evt.condition_value = self.spin_cpa.value()
-        else:
-            evt.condition_value = self.combo_area.currentData()
-            
-        evt.action_type = self.combo_action.currentText()
-        evt.action_option = self.combo_action_option.currentText()
-        evt.target_ship_idx = self.combo_target.currentData()
-        evt.reference_ship_idx = self.combo_ref.currentData()
-        evt.action_value = self.spin_action_val.value()
-        
-        # Regenerate ID to force re-evaluation in SimulationWorker
-        new_id = str(uuid.uuid4())
-        evt.id = new_id
-        
+
+        # 조건부 이벤트만 저장 (조건부 설정은 시나리오 탭에서만)
+        evt.prerequisite_logic = "AND" if self.combo_prereq_logic.currentIndex() == 0 else "OR"
+        evt.prerequisite_events = []
+        for i in range(self.list_prereqs.count()):
+            item = self.list_prereqs.item(i)
+            event_id = item.data(Qt.ItemDataRole.UserRole)
+            mode = item.data(Qt.ItemDataRole.UserRole + 1)
+            evt.prerequisite_events.append(EventCondition(event_id=event_id, mode=mode))
+
+        # ID 유지 - triggered_events에서 제거하여 재평가 가능하게 함
+        main_win = self.window()
+        if hasattr(main_win, 'worker') and main_win.worker:
+            main_win.worker.reset_triggered_event(evt.id)
+
+        # Project Events와 양방향 동기화 (조건부 이벤트 정보만)
+        proj_evt = next((e for e in current_project.events if e.id == evt.id), None)
+        if proj_evt:
+            proj_evt.prerequisite_logic = evt.prerequisite_logic
+            proj_evt.prerequisite_events = evt.prerequisite_events
+
         self.list_scen_events.blockSignals(True)
         item = self.list_scen_events.item(row)
         if item:
             item.setText(evt.name)
             item.setCheckState(Qt.CheckState.Checked if evt.enabled else Qt.CheckState.Unchecked)
-            item.setData(Qt.ItemDataRole.UserRole, new_id)
         self.list_scen_events.blockSignals(False)
-        
-        # Sync with Project Events (Single Source of Truth)
-        proj_evt = next((e for e in current_project.events if e.id == old_id), None)
-        if proj_evt:
-            proj_evt.name = evt.name
-            proj_evt.enabled = evt.enabled
-            proj_evt.trigger_type = evt.trigger_type
-            proj_evt.condition_value = evt.condition_value
-            proj_evt.action_type = evt.action_type
-            proj_evt.target_ship_idx = evt.target_ship_idx
-            proj_evt.reference_ship_idx = evt.reference_ship_idx
-            proj_evt.action_value = evt.action_value
-            proj_evt.is_relative_to_end = evt.is_relative_to_end
-            if hasattr(evt, 'action_option'):
-                proj_evt.action_option = evt.action_option
-            proj_evt.id = new_id # Update Project Event ID to maintain sync
+
+        # Event Panel UI 갱신
+        if hasattr(main_win, 'event_panel'):
+            main_win.event_panel.refresh_table()
 
         self.is_dirty = False
         self.editor_group.setTitle("Selected Event Details")
@@ -801,3 +869,42 @@ class ScenarioPanel(QWidget):
         dur = self.get_current_ship_duration()
         new_val = max(0, dur - current_val)
         self.time_input.set_seconds(new_val)
+
+    def _populate_prereq_event_combo(self, current_evt_id=None):
+        """조건부 이벤트 콤보박스 채우기"""
+        self.combo_prereq_event.clear()
+        if not app_state.current_scenario:
+            return
+        for evt in app_state.current_scenario.events:
+            if evt.id != current_evt_id:  # 자기 자신 제외
+                self.combo_prereq_event.addItem(evt.name, evt.id)
+
+    def _add_prerequisite(self):
+        """선행 조건 추가"""
+        if self.combo_prereq_event.count() == 0:
+            return
+
+        event_id = self.combo_prereq_event.currentData()
+        event_name = self.combo_prereq_event.currentText()
+        mode = "TRIGGERED" if self.combo_prereq_mode.currentIndex() == 0 else "NOT_TRIGGERED"
+        mode_text = "발동됨" if mode == "TRIGGERED" else "발동 안됨"
+
+        # 중복 체크
+        for i in range(self.list_prereqs.count()):
+            item = self.list_prereqs.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == event_id:
+                QMessageBox.warning(self, "Warning", "이미 추가된 이벤트입니다.")
+                return
+
+        item = QListWidgetItem(f"{event_name} → {mode_text}")
+        item.setData(Qt.ItemDataRole.UserRole, event_id)
+        item.setData(Qt.ItemDataRole.UserRole + 1, mode)
+        self.list_prereqs.addItem(item)
+        self.mark_dirty()
+
+    def _remove_prerequisite(self):
+        """선택된 선행 조건 제거"""
+        current_row = self.list_prereqs.currentRow()
+        if current_row >= 0:
+            self.list_prereqs.takeItem(current_row)
+            self.mark_dirty()

@@ -3,11 +3,12 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox, QWidget, QGroupBox, QFormLayout, QPushButton, QLabel,
     QCheckBox, QSpinBox, QComboBox, QTableWidget, QHeaderView, QTableWidgetItem,
     QDoubleSpinBox, QMessageBox, QColorDialog, QAbstractSpinBox, QTabWidget,
-    QSlider, QScrollArea, QSizePolicy
+    QSlider, QScrollArea, QSizePolicy, QApplication
 )
 from PyQt6.QtCore import (
     Qt
 )
+from app.ui.styles import apply_modern_style
 
 try:
     import pyqtgraph as pg
@@ -836,7 +837,17 @@ class SettingsDialog(QDialog):
                 # Area name update if needed, but currently read-only in table logic above for non-ships
 
         current_project.settings.show_speed_notes = self.chk_speed_notes.isChecked()
-        current_project.settings.theme_mode = self.combo_theme.currentText()
+
+        # Theme change - apply immediately
+        new_theme = self.combo_theme.currentText()
+        if new_theme != current_project.settings.theme_mode:
+            current_project.settings.theme_mode = new_theme
+            app = QApplication.instance()
+            if app:
+                apply_modern_style(app, new_theme)
+        else:
+            current_project.settings.theme_mode = new_theme
+
         current_project.settings.own_ship_idx = self.spin_own.value()
         current_project.settings.speed_variance = self.spin_speed_var.value()
         current_project.settings.path_thickness = self.spin_path_th.value()
