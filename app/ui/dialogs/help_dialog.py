@@ -92,7 +92,7 @@ class HelpDialog(QDialog):
                 <p>시뮬레이션 중 무작위 선박들을 생성하여 교통량을 늘릴 수 있습니다.</p>
                 <ul>
                     <li><b>생성:</b> 'Random Target Generate' 버튼을 눌러 반경(nm)과 생성할 선박 수(AI/RA/Both)를 입력합니다.</li>
-                    <li><b>특징:</b> 랜덤 타겟은 자선 주변에서 생성되며, 설정에 따라 지그재그 기동을 하거나 직선 운동을 합니다.</li>
+                    <li><b>특징:</b> 랜덤 타겟은 자선 주변에서 생성되며 직선 운동을 합니다.</li>
                     <li><b>삭제:</b> 'Clear Random Targets' 버튼으로 일괄 삭제하거나, 지도상에서 더블 클릭하여 개별 삭제할 수 있습니다.</li>
                 </ul>
                 
@@ -131,7 +131,6 @@ class HelpDialog(QDialog):
                     <li><b>Appearance:</b> 테마(System/Light/Dark), 선박 및 경로 색상/두께 등을 사용자 정의할 수 있습니다.</li>
                     <li><b>Dropout:</b> 통신 환경 악화를 모사하기 위해 각 신호(AIVDM, RATTM 등)의 유실 확률을 설정합니다.</li>
                     <li><b>Object:</b> 자선(Own Ship)으로 사용할 선박의 인덱스를 지정하거나, 랜덤 타겟 생성 시의 속도 분산 등을 설정합니다.</li>
-                    <li><b>Simulation:</b> RTG 타겟의 지그재그 기동 여부와 변침 빈도를 설정합니다.</li>
                 </ul>
             """
         }

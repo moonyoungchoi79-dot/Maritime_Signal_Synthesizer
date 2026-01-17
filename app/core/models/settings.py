@@ -62,9 +62,6 @@ class ProjectSettings:
     btn_speed_color: str = "#FF9800"
     btn_sim_color: str = "#2196F3"
     btn_rtg_color: str = "#FFA500"
-    rtg_zigzag_enabled: bool = True
-    rtg_zigzag_turns: int = 2
-    rtg_zigzag_angle_limit: float = 60.0
     random_color: str = "#B8860B"
     mask_color: str = "#404040"
 

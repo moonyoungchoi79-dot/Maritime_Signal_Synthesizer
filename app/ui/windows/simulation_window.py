@@ -321,65 +321,38 @@ class SimulationWindow(QWidget):
             # Generate Path from t_now to End of Own Ship Duration
             # Since we don't know duration, we just generate a path long enough (e.g. 24 hours)
             duration_remaining = 24 * 3600.0
-            
-            # --- Zigzag Logic ---
-            use_zigzag = current_project.settings.rtg_zigzag_enabled
-            max_turns = current_project.settings.rtg_zigzag_turns
-            angle_limit = current_project.settings.rtg_zigzag_angle_limit
-            
-            segments = []
-            if use_zigzag:
-                n_turns = random.randint(1, max_turns)
-                # Split duration into n_turns + 1 segments
-                cut_points = sorted([random.random() for _ in range(n_turns)])
-                cut_points = [0.0] + cut_points + [1.0]
-                for k in range(len(cut_points)-1):
-                    dur = (cut_points[k+1] - cut_points[k]) * duration_remaining
-                    segments.append(dur)
-            else:
-                segments.append(duration_remaining)
-            
-            # REVERTED OPTIMIZATION: Use dense points for accuracy
-            # We generate points every 1 second to ensure the ship follows the path exactly
-            # even at high simulation speeds (e.g. 10000x), preventing deviation and heading mismatch.
-            
+
+            # Straight line path generation
             raw_pixels = []
             curr_lat, curr_lon = start_lat, start_lon
             curr_heading = heading
-            
+
             px_start, py_start = coords_to_pixel(start_lat, start_lon, mi)
             raw_pixels.append((px_start, py_start))
-            
+
             dt = 1.0 # 1 second interval
-            
-            for k, seg_dur in enumerate(segments):
-                steps = int(seg_dur / dt)
-                
-                # Velocity components (knots -> deg/sec)
-                # 1 knot = 1 nm/h = 1/60 deg_lat/h
-                dist_per_sec_deg = (spd / 3600.0) / 60.0
-                
-                d_lat_step = dist_per_sec_deg * math.cos(math.radians(curr_heading)) * dt
-                d_lon_step_base = dist_per_sec_deg * math.sin(math.radians(curr_heading)) * dt
-                
-                for _ in range(steps):
-                    curr_lat += d_lat_step
-                    if curr_lat > 89.9: curr_lat = 89.9
-                    elif curr_lat < -89.9: curr_lat = -89.9
-                    
-                    cos_lat = math.cos(math.radians(curr_lat))
-                    if abs(cos_lat) < 0.01: cos_lat = 0.01
-                    
-                    d_lon_step = d_lon_step_base / cos_lat
-                    curr_lon += d_lon_step
-                    
-                    px, py = coords_to_pixel(curr_lat, curr_lon, mi)
-                    raw_pixels.append((px, py))
-                
-                # Change heading for next segment
-                if k < len(segments) - 1:
-                    change = random.uniform(-angle_limit, angle_limit)
-                    curr_heading = (curr_heading + change) % 360.0
+            steps = int(duration_remaining / dt)
+
+            # Velocity components (knots -> deg/sec)
+            # 1 knot = 1 nm/h = 1/60 deg_lat/h
+            dist_per_sec_deg = (spd / 3600.0) / 60.0
+
+            d_lat_step = dist_per_sec_deg * math.cos(math.radians(curr_heading)) * dt
+            d_lon_step_base = dist_per_sec_deg * math.sin(math.radians(curr_heading)) * dt
+
+            for _ in range(steps):
+                curr_lat += d_lat_step
+                if curr_lat > 89.9: curr_lat = 89.9
+                elif curr_lat < -89.9: curr_lat = -89.9
+
+                cos_lat = math.cos(math.radians(curr_lat))
+                if abs(cos_lat) < 0.01: cos_lat = 0.01
+
+                d_lon_step = d_lon_step_base / cos_lat
+                curr_lon += d_lon_step
+
+                px, py = coords_to_pixel(curr_lat, curr_lon, mi)
+                raw_pixels.append((px, py))
             
             # Create Ship Object
             # 1. Find unique index >= 1000

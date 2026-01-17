@@ -758,22 +758,9 @@ class SettingsDialog(QDialog):
     def init_simulation(self):
         w = QWidget()
         l = QFormLayout(w)
-        
-        self.chk_zigzag = QCheckBox()
-        self.chk_zigzag.setChecked(current_project.settings.rtg_zigzag_enabled)
-        l.addRow("Enable RTG Zigzag Maneuver:", self.chk_zigzag)
-        
-        self.spin_zigzag_turns = QSpinBox()
-        self.spin_zigzag_turns.setRange(1, 10)
-        self.spin_zigzag_turns.setValue(current_project.settings.rtg_zigzag_turns)
-        l.addRow("RTG Zigzag Turns (Expected Value):", self.spin_zigzag_turns)
-        
-        self.spin_zigzag_angle = QDoubleSpinBox()
-        self.spin_zigzag_angle.setRange(0, 180)
-        self.spin_zigzag_angle.setValue(current_project.settings.rtg_zigzag_angle_limit)
-        self.spin_zigzag_angle.setSuffix(" deg")
-        l.addRow("RTG Zigzag Angle Limit (+/-):", self.spin_zigzag_angle)
-        
+
+        # Placeholder - simulation settings can be added here in the future
+
         self.stack.addWidget(w)
 
     def _create_signal_noise_cell(self, value):
@@ -885,6 +872,3 @@ class SettingsDialog(QDialog):
         for i, s in enumerate(self.ais_frag_spins):
             current_project.settings.ais_fragment_probs[i] = s.value()
 
-        current_project.settings.rtg_zigzag_enabled = self.chk_zigzag.isChecked()
-        current_project.settings.rtg_zigzag_turns = self.spin_zigzag_turns.value()
-        current_project.settings.rtg_zigzag_angle_limit = self.spin_zigzag_angle.value()
