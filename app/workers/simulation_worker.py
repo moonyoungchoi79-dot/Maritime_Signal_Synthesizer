@@ -12,11 +12,10 @@ from PyQt6.QtCore import QObject, pyqtSignal, Qt, QPointF, QCoreApplication
 from PyQt6.QtGui import QPolygonF
 
 from app.core.models.project import current_project
-from app.core.models.event import Event
 from app.core.geometry import (
-    vincenty_distance, pixel_to_coords, coords_to_pixel, normalize_lon,
+    haversine_distance, pixel_to_coords, coords_to_pixel, normalize_lon,
     lla_to_ecef, ecef_to_lla, ecef_distance, ecef_move, ecef_heading,
-    ecef_interpolate, path_points_to_ecef, is_point_in_polygon
+    ecef_interpolate, path_points_to_ecef
 )
 from app.core.nmea import calculate_checksum, encode_ais_payload
 
@@ -82,7 +81,7 @@ class SimulationWorker(QObject):
             x2, y2, z2 = lla_to_ecef(lat2, lon2, 0.0)
             
             # 대권 거리 계산
-            dist_m = vincenty_distance(lat1, lon1, lat2, lon2)
+            dist_m = haversine_distance(lat1, lon1, lat2, lon2)
             
             # 구간이 길면 잘게 쪼개어 대권상에 점을 배치
             if dist_m > max_segment_m:
@@ -400,85 +399,91 @@ class SimulationWorker(QObject):
         dist_m = R * theta
         return dist_m / 1852.0
 
-    def check_events(self):
-        import math # 거리 계산을 위해 필요
-
-        for event in current_project.events:
-            if not event.enabled: continue
-            
+    def check_events(self, t_current):
+        for evt in self.events:
+            if evt.id in self.triggered_events: continue
             triggered = False
             
-            # 1. TIME Trigger
-            if event.trigger_type == Event.TRIGGER_TIME:
-                # Trigger exactly once when time passed
-                # To avoid multiple triggers, we need a flag or check if specific time frame matches
-                # Simpler approach: check if current_time >= trigger_time. 
-                # BUT this will trigger continuously. 
-                # So we need "already_triggered" state. But Event model implies stateless check?
-                # Usually events are "One Shot". Let's assume user wants it once.
-                # However, without state in Event object (like 'fired'), it repeats.
-                # Let's add a temporary set in Worker to track fired events by name/id?
-                # For now, let's just check equality with tolerance or use a 'fired' flag if we modify Event.
-                # Assuming 'one-shot' behavior is desired.
-                # (Existing logic implies simple check)
+            if evt.trigger_type == "TIME":
+                if t_current >= evt.condition_value: triggered = True
+            elif evt.trigger_type == "AREA_ENTER":
+                ship = self.proj.get_ship_by_idx(evt.target_ship_idx)
+                area = self.proj.get_area_by_id(int(evt.condition_value))
+                if ship and area and ship.idx in self.dynamic_ships:
+                    dyn = self.dynamic_ships[ship.idx]
+                    lat, lon, _ = ecef_to_lla(dyn['x'], dyn['y'], dyn['z'])
+                    px, py = coords_to_pixel(lat, lon, self.proj.map_info)
+                    poly = QPolygonF([QPointF(x,y) for x,y in area.geometry])
+                    if poly.containsPoint(QPointF(px, py), Qt.FillRule.OddEvenFill): triggered = True
+            elif evt.trigger_type == "AREA_LEAVE":
+                ship = self.proj.get_ship_by_idx(evt.target_ship_idx)
+                area = self.proj.get_area_by_id(int(evt.condition_value))
+                if ship and area and ship.idx in self.dynamic_ships:
+                    dyn = self.dynamic_ships[ship.idx]
+                    lat, lon, _ = ecef_to_lla(dyn['x'], dyn['y'], dyn['z'])
+                    px, py = coords_to_pixel(lat, lon, self.proj.map_info)
+                    poly = QPolygonF([QPointF(x,y) for x,y in area.geometry])
+                    if not poly.containsPoint(QPointF(px, py), Qt.FillRule.OddEvenFill): triggered = True
+            elif evt.trigger_type in ["CPA_UNDER", "CPA_OVER", "DIST_UNDER", "DIST_OVER"]:
+                tgt_ship = self.proj.get_ship_by_idx(evt.target_ship_idx)
+                ref_idx = evt.reference_ship_idx
+                if ref_idx == -1: ref_idx = self.proj.settings.own_ship_idx
+                ref_ship = self.proj.get_ship_by_idx(ref_idx)
                 
-                # Check if this event already fired? 
-                # For this snippet, I will implement simple logic: 
-                # if abs(self.current_time - event.trigger_time) < self.unit_time: triggered = True
-                if self.current_time >= event.trigger_time and (self.current_time - self.unit_time) < event.trigger_time:
-                    triggered = True
-
-            # 2. AREA Trigger (Enter/Leave)
-            elif event.trigger_type in [Event.TRIGGER_AREA_ENTER, Event.TRIGGER_AREA_LEAVE]:
-                ship_idx = event.target_ship_idx # The ship that moves
-                area_id = event.trigger_area_id
-                
-                if ship_idx in self.dynamic_ships:
-                    ship_pos = self.dynamic_ships[ship_idx]
-                    lat, lon, _ = ecef_to_lla(ship_pos['x'], ship_pos['y'], ship_pos['z'])
+                if tgt_ship and ref_ship and tgt_ship.idx in self.dynamic_ships and ref_ship.idx in self.dynamic_ships:
+                    td = self.dynamic_ships[tgt_ship.idx]
+                    rd = self.dynamic_ships[ref_ship.idx]
                     
-                    area = current_project.get_area_by_id(area_id)
-                    if area:
-                        in_area = is_point_in_polygon(lat, lon, area.geometry)
+                    # 1. Current Distance (Chord -> Arc)
+                    dist_chord_m = ecef_distance(td['x'], td['y'], td['z'], rd['x'], rd['y'], rd['z'])
+                    dist_nm = self._ecef_dist_to_geodesic_nm(dist_chord_m)
+                    
+                    if evt.trigger_type == "DIST_UNDER" and dist_nm <= evt.condition_value: triggered = True
+                    elif evt.trigger_type == "DIST_OVER" and dist_nm >= evt.condition_value: triggered = True
+                    elif evt.trigger_type in ["CPA_UNDER", "CPA_OVER"]:
+                        # CPA Logic with Geodesic consideration
+                        # Step A: Estimate T_CPA using vector algebra (valid for finding time)
+                        t_lat, t_lon, _ = ecef_to_lla(td['x'], td['y'], td['z'])
+                        r_lat, r_lon, _ = ecef_to_lla(rd['x'], rd['y'], rd['z'])
                         
-                        # We need previous state to detect Enter/Leave edge
-                        # Let's store area state in self.ship_area_states = { (ship_idx, area_id): bool }
-                        state_key = (ship_idx, area_id)
-                        was_in = self.ship_area_states.get(state_key, False)
+                        tvx, tvy, tvz = self._calculate_ecef_velocity(t_lat, t_lon, td.get('sog', td['spd']), td['hdg'])
+                        rvx, rvy, rvz = self._calculate_ecef_velocity(r_lat, r_lon, rd.get('sog', rd['spd']), rd['hdg'])
                         
-                        if event.trigger_type == Event.TRIGGER_AREA_ENTER:
-                            if not was_in and in_area: triggered = True
-                        elif event.trigger_type == Event.TRIGGER_AREA_LEAVE:
-                            if was_in and not in_area: triggered = True
-                            
-                        self.ship_area_states[state_key] = in_area
-
-            # [추가] 3. DISTANCE Trigger (Distance to Ship)
-            elif event.trigger_type == Event.TRIGGER_DISTANCE:
-                subject_idx = event.target_ship_idx       # 액션을 수행할 선박 (이벤트의 주체)
-                target_idx = event.trigger_target_ship_idx # 거리를 잴 대상 선박
-                
-                # 두 선박이 모두 시뮬레이션 상에 존재해야 함
-                if subject_idx in self.dynamic_ships and target_idx in self.dynamic_ships:
-                    s_pos = self.dynamic_ships[subject_idx]
-                    t_pos = self.dynamic_ships[target_idx]
-                    
-                    # ECEF 거리 계산 (직선 거리, 미터 단위)
-                    dist = math.sqrt(
-                        (s_pos['x'] - t_pos['x'])**2 +
-                        (s_pos['y'] - t_pos['y'])**2 +
-                        (s_pos['z'] - t_pos['z'])**2
-                    )
-                    
-                    if event.trigger_condition == "UNDER":
-                        if dist <= event.trigger_distance:
-                            triggered = True
-                    else: # OVER
-                        if dist >= event.trigger_distance:
-                            triggered = True
+                        px, py, pz = td['x'] - rd['x'], td['y'] - rd['y'], td['z'] - rd['z']
+                        vx, vy, vz = tvx - rvx, tvy - rvy, tvz - rvz
+                        
+                        v_sq = vx*vx + vy*vy + vz*vz
+                        cpa_dist_nm = dist_nm # Default to current
+                        
+                        if v_sq > 1e-9:
+                            t_cpa = -(px*vx + py*vy + pz*vz) / v_sq
+                            if t_cpa > 0:
+                                # Step B: Simulate position at T_CPA using Great Circle Move (Correcting for Earth curve)
+                                t_sog = td.get('sog', td['spd'])
+                                r_sog = rd.get('sog', rd['spd'])
+                                
+                                # Move Target
+                                t_move_m = t_sog * 1852.0 * (t_cpa / 3600.0)
+                                t_new_lat, t_new_lon, _ = self._move_great_circle_step(t_lat, t_lon, td['hdg'], t_move_m)
+                                tx_new, ty_new, tz_new = lla_to_ecef(t_new_lat, t_new_lon, 0.0)
+                                
+                                # Move Ref
+                                r_move_m = r_sog * 1852.0 * (t_cpa / 3600.0)
+                                r_new_lat, r_new_lon, _ = self._move_great_circle_step(r_lat, r_lon, rd['hdg'], r_move_m)
+                                rx_new, ry_new, rz_new = lla_to_ecef(r_new_lat, r_new_lon, 0.0)
+                                
+                                # Step C: Measure Distance at predicted positions (Chord -> Arc)
+                                future_dist_chord = ecef_distance(tx_new, ty_new, tz_new, rx_new, ry_new, rz_new)
+                                cpa_dist_nm = self._ecef_dist_to_geodesic_nm(future_dist_chord)
+                        
+                        if evt.trigger_type == "CPA_UNDER" and cpa_dist_nm <= evt.condition_value: triggered = True
+                        elif evt.trigger_type == "CPA_OVER" and cpa_dist_nm >= evt.condition_value: triggered = True
 
             if triggered:
-                self.execute_event(event)
+                self.log_message.emit(f"[EVENT] {evt.name} triggered.")
+                self.event_triggered.emit(evt.name, evt.target_ship_idx)
+                self.triggered_events.add(evt.id)
+                self.apply_event_action(evt, t_current)
 
     def apply_event_action(self, evt, t_current):
         sid = evt.target_ship_idx

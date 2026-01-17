@@ -537,11 +537,8 @@ class SimulationPanel(QWidget):
         return new_lat, new_lon, new_hdg
 
     def generate_random_targets_logic(self, own_ship, R_nm, N_ai, N_ra, N_both, area_id=-1):
-        import numpy as np # 고속 연산을 위한 NumPy 사용
-
         seed_val = (current_project.seed + len(current_project.ships)) % (2**32 - 1)
         random.seed(seed_val)
-        np.random.seed(seed_val)
 
         t_now = 0.0
         if self.worker and self.worker.running:
@@ -574,15 +571,12 @@ class SimulationPanel(QWidget):
 
         R_deg_lat = R_nm / 60.0
         
-        # 최적화를 위해 좌표 변환 함수를 지역 변수에 바인딩
-        ctp = coords_to_pixel
-        
         for i in range(total_targets):
             if i < N_ai: s_type = "AI"
             elif i < N_ai + N_ra: s_type = "RA"
             else: s_type = "BOTH"
             
-            # --- 1. 시작 위치 생성 (Start Position Generation) ---
+            # Start Position Generation
             if target_area_poly:
                 found = False
                 for _ in range(200):
@@ -609,7 +603,7 @@ class SimulationPanel(QWidget):
             
             start_lat = max(-89.9, min(89.9, start_lat))
             
-            # --- 2. 속도 및 헤딩 설정 ---
+            # Speed and Heading
             variance = current_project.settings.speed_variance
             sigma = math.sqrt(variance)
             spd = abs(random.gauss(own_spd_kn, sigma)) 
@@ -617,53 +611,34 @@ class SimulationPanel(QWidget):
             
             heading = random.random() * 360.0
             
-            # --- 3. [최적화됨] NumPy를 이용한 대권 항로 일괄 계산 ---
+            # [수정됨] 지그재그 로직 제거 -> 전체 지속 시간 동안 직진
             duration_remaining = 24 * 3600.0 
-            dt = 60.0 # 60초 간격
             
-            # 시간 및 이동 거리 배열 생성 (Vectorization)
-            times = np.arange(0, duration_remaining, dt)
+            # --- Path Generation (Great Circle) ---
+            curr_lat, curr_lon = start_lat, start_lon
+            curr_heading = heading
+            
+            px_start, py_start = coords_to_pixel(start_lat, start_lon, mi)
+            raw_pixels = [(px_start, py_start)]
+            
+            dt = 60.0 # 60 seconds step for smooth curve visualization
             spd_mps = spd * 0.514444 # Knots to m/s
-            dists_m = times * spd_mps 
-            
-            # 초기 위치 및 헤딩 (Radians)
-            lat1_rad = math.radians(start_lat)
-            lon1_rad = math.radians(start_lon)
-            hdg_rad = math.radians(heading)
-            R_earth = 6371000.0
-            
-            # 각 거리 (Angular distances)
-            ang_dists = dists_m / R_earth
-            
-            # 대권 항로 공식 (Direct Geodesic on Sphere) - for loop 제거됨
-            sin_lat1 = math.sin(lat1_rad)
-            cos_lat1 = math.cos(lat1_rad)
-            cos_hdg = math.cos(hdg_rad)
-            sin_hdg = math.sin(hdg_rad)
-            
-            sin_ang_dists = np.sin(ang_dists)
-            cos_ang_dists = np.cos(ang_dists)
-            
-            # 위도(Latitude) 일괄 계산
-            lat2_rads = np.arcsin(sin_lat1 * cos_ang_dists + cos_lat1 * sin_ang_dists * cos_hdg)
-            
-            # 경도(Longitude) 일괄 계산
-            y = sin_hdg * sin_ang_dists * cos_lat1
-            x = cos_ang_dists - sin_lat1 * np.sin(lat2_rads)
-            lon2_rads = lon1_rad + np.arctan2(y, x)
-            
-            # 라디안 -> 도(Degrees) 변환
-            lats_deg = np.degrees(lat2_rads)
-            lons_deg = np.degrees(lon2_rads)
-            
-            # 범위 제한 및 정규화
-            lats_deg = np.clip(lats_deg, -89.9, 89.9)
-            lons_deg = (lons_deg + 180) % 360 - 180
-            
-            # 픽셀 변환 (List Comprehension이 일반 for loop보다 빠름)
-            raw_pixels = [ctp(lat, lon, mi) for lat, lon in zip(lats_deg, lons_deg)]
 
-            # --- 4. 선박 객체 생성 ---
+            # 단일 세그먼트로 처리 (직선 이동)
+            steps = int(duration_remaining / dt)
+            if steps < 1: steps = 1
+            dist_step = spd_mps * dt
+            
+            for _ in range(steps):
+                curr_lat, curr_lon, curr_heading = self._move_great_circle_step(curr_lat, curr_lon, curr_heading, dist_step)
+                
+                if curr_lat > 89.9: curr_lat = 89.9
+                elif curr_lat < -89.9: curr_lat = -89.9
+                
+                px, py = coords_to_pixel(curr_lat, curr_lon, mi)
+                raw_pixels.append((px, py))
+            
+            # Create Ship Object
             new_idx = 1001
             existing_idxs = {s.idx for s in current_project.ships}
             while new_idx in existing_idxs: new_idx += 1

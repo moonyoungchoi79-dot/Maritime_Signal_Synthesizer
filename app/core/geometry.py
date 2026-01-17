@@ -3,7 +3,7 @@ import numpy as np
 from typing import List, Tuple
 from app.core.models.map_info import MapInfo
 
-def vincenty_distance(lat1, lon1, lat2, lon2):
+def haversine_distance(lat1, lon1, lat2, lon2):
     
     a = 6378137.0         
     f = 1 / 298.257223563 
@@ -68,34 +68,6 @@ def _simple_haversine_fallback(lat1, lon1, lat2, lon2):
 
 def normalize_lon(lon):
     return (lon + 180) % 360 - 180
-
-
-def is_point_in_polygon(lat, lon, polygon_coords):
-    """
-    Check if a point (lat, lon) is inside a polygon.
-    polygon_coords: List of (x, y) tuples representing polygon vertices in pixel coordinates.
-    Uses ray-casting algorithm.
-    """
-    if not polygon_coords or len(polygon_coords) < 3:
-        return False
-
-    x, y = lon, lat
-    n = len(polygon_coords)
-    inside = False
-
-    p1x, p1y = polygon_coords[0]
-    for i in range(1, n + 1):
-        p2x, p2y = polygon_coords[i % n]
-        if y > min(p1y, p2y):
-            if y <= max(p1y, p2y):
-                if x <= max(p1x, p2x):
-                    if p1y != p2y:
-                        xinters = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
-                    if p1x == p2x or x <= xinters:
-                        inside = not inside
-        p1x, p1y = p2x, p2y
-
-    return inside
 
 
 def resample_polyline_numpy(points: List[Tuple[float, float]], n_out: int):

@@ -1,226 +1,240 @@
+import uuid
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, 
-    QLineEdit, QComboBox, QDoubleSpinBox, QPushButton, QGroupBox,
-    QStackedWidget, QWidget, QMessageBox
+    QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QLineEdit,
+    QComboBox, QDialogButtonBox, QLabel, QDoubleSpinBox, QMessageBox,
+    QGroupBox, QCheckBox
 )
-from PyQt6.QtCore import Qt
-from app.core.models.event import Event
+from app.core.models.event import SimEvent
 from app.core.models.project import current_project
 
 class EventEditorDialog(QDialog):
     def __init__(self, parent=None, event=None):
         super().__init__(parent)
-        self.setWindowTitle("Event Editor")
-        self.resize(450, 600)
+        self.setWindowTitle("Edit Event" if event else "New Event")
         self.event = event
-        
-        # UI Components
-        self.edt_name = QLineEdit()
-        
-        # Trigger UI
-        self.combo_trigger_type = QComboBox()
-        # [수정] 콤보박스에 아이템 추가 (순서 중요: TIME, AREA_ENTER, AREA_LEAVE, DISTANCE_TO_SHIP)
-        self.combo_trigger_type.addItems(["Time (sec)", "Area Enter", "Area Leave", "Distance to Ship"])
-        
-        self.stack_trigger_params = QStackedWidget()
-        
-        # Action UI
-        self.combo_target_ship = QComboBox()
-        self.combo_action_type = QComboBox()
-        self.combo_action_type.addItems(["Change Speed (kn)", "Change Heading (deg)", "Stop"])
-        self.spin_action_val = QDoubleSpinBox()
-        self.spin_action_val.setRange(0, 10000)
-        
+        self.resize(400, 450)
         self.init_ui()
-        
-        if self.event:
-            self.load_data()
+        if event:
+            self.load_event()
         else:
-            self.event = Event() # Temp for default
-            self.load_data()
-            
+            self.trigger_type_combo.setCurrentIndex(0)
+            self.update_trigger_ui()
+            self.action_type_combo.setCurrentIndex(0)
+            self.update_action_ui()
+
     def init_ui(self):
-        main_layout = QVBoxLayout(self)
+        layout = QVBoxLayout(self)
         
-        # Common Info
-        grp_info = QGroupBox("General")
-        l_info = QFormLayout(grp_info)
-        l_info.addRow("Event Name:", self.edt_name)
-        main_layout.addWidget(grp_info)
+        form = QFormLayout()
+        self.name_edit = QLineEdit("New Event")
+        form.addRow("Name:", self.name_edit)
         
-        # Trigger Group
-        grp_trig = QGroupBox("Trigger Condition")
-        l_trig = QVBoxLayout(grp_trig)
+        self.enabled_chk = QCheckBox("Enabled")
+        self.enabled_chk.setChecked(True)
+        form.addRow("", self.enabled_chk)
         
-        row_type = QHBoxLayout()
-        row_type.addWidget(QLabel("Type:"))
-        row_type.addWidget(self.combo_trigger_type)
-        l_trig.addLayout(row_type)
+        layout.addLayout(form)
         
-        l_trig.addWidget(self.stack_trigger_params)
+        grp_trigger = QGroupBox("Trigger")
+        trig_layout = QFormLayout(grp_trigger)
         
-        # --- Stack Page 0: Time ---
-        p_time = QWidget()
-        l_time = QFormLayout(p_time)
-        self.spin_trig_time = QDoubleSpinBox()
-        self.spin_trig_time.setRange(0, 1e7)
-        l_time.addRow("Time (sec):", self.spin_trig_time)
-        self.stack_trigger_params.addWidget(p_time)
+        self.trigger_type_combo = QComboBox()
+        self.trigger_type_combo.addItems(["TIME", "AREA_ENTER", "AREA_LEAVE", "CPA_UNDER", "CPA_OVER", "DIST_UNDER", "DIST_OVER"])
+        self.trigger_type_combo.currentIndexChanged.connect(self.update_trigger_ui)
+        trig_layout.addRow("Type:", self.trigger_type_combo)
         
-        # --- Stack Page 1 & 2: Area (Shared UI, separate logic index) ---
-        # We can reuse the same widget logic or create two similar ones. 
-        # For simplicity, let's create one widget for Area selection and reuse.
-        p_area = QWidget()
-        l_area = QFormLayout(p_area)
-        self.combo_trig_area = QComboBox()
-        # Populate Areas
-        for area in current_project.areas:
-            self.combo_trig_area.addItem(f"{area.name} (ID: {area.id})", area.id)
-        l_area.addRow("Select Area:", self.combo_trig_area)
-        self.stack_trigger_params.addWidget(p_area) 
-        # Note: Index 1 is Enter, Index 2 is Leave. 
-        # We need another page for Leave or reuse. 
-        # Let's add the same widget instance again? No, widgets can only have one parent.
-        # Create another identical one for Index 2.
-        p_area2 = QWidget()
-        l_area2 = QFormLayout(p_area2)
-        self.combo_trig_area2 = QComboBox()
-        for area in current_project.areas:
-            self.combo_trig_area2.addItem(f"{area.name} (ID: {area.id})", area.id)
-        l_area2.addRow("Select Area:", self.combo_trig_area2)
-        self.stack_trigger_params.addWidget(p_area2)
+        self.target_ship_combo = QComboBox() 
+        self.populate_ships(self.target_ship_combo)
+        trig_layout.addRow("Target Ship:", self.target_ship_combo)
+        
+        self.ref_ship_combo = QComboBox() 
+        self.populate_ships(self.ref_ship_combo, include_own=True) 
+        self.ref_ship_label = QLabel("Ref Ship:")
+        trig_layout.addRow(self.ref_ship_label, self.ref_ship_combo)
+        
+        self.condition_val_spin = QDoubleSpinBox()
+        self.condition_val_spin.setRange(0, 9999999)
+        self.condition_val_label = QLabel("Value:")
+        trig_layout.addRow(self.condition_val_label, self.condition_val_spin)
+        
+        self.area_combo = QComboBox()
+        self.populate_areas()
+        self.area_label = QLabel("Area:")
+        trig_layout.addRow(self.area_label, self.area_combo)
+        
+        layout.addWidget(grp_trigger)
+        
+        grp_action = QGroupBox("Action")
+        act_layout = QFormLayout(grp_action)
+        
+        self.action_type_combo = QComboBox()
+        self.action_type_combo.addItems(["STOP", "CHANGE_SPEED", "CHANGE_HEADING", "MANEUVER", "CHANGE_DESTINATION_LOC"])
+        self.action_type_combo.currentIndexChanged.connect(self.update_action_ui)
+        act_layout.addRow("Type:", self.action_type_combo)
+        
+        self.action_val_spin = QDoubleSpinBox()
+        self.action_val_spin.setRange(0, 10000) 
+        self.action_val_label = QLabel("Value:")
+        act_layout.addRow(self.action_val_label, self.action_val_spin)
 
-        # --- [추가] Stack Page 3: Distance to Ship ---
-        p_dist = QWidget()
-        l_dist = QFormLayout(p_dist)
+        self.action_opt_combo = QComboBox()
+        self.action_opt_combo.addItems(["ReturnToOriginalPath_ShortestDistance", "ChangeDestination_ToOriginalFinal"])
+        self.action_opt_label = QLabel("Option:")
+        act_layout.addRow(self.action_opt_label, self.action_opt_combo)
         
-        self.combo_dist_target_ship = QComboBox()
-        # Populate Ships (exclude can be done later, just list all for now)
-        for ship in current_project.ships:
-             self.combo_dist_target_ship.addItem(f"{ship.name} (ID: {ship.idx})", ship.idx)
+        self.lat_spin = QDoubleSpinBox()
+        self.lat_spin.setRange(-90, 90)
+        self.lat_spin.setDecimals(6)
+        self.lat_label = QLabel("Lat:")
+        act_layout.addRow(self.lat_label, self.lat_spin)
+        
+        self.lon_spin = QDoubleSpinBox()
+        self.lon_spin.setRange(-180, 180)
+        self.lon_spin.setDecimals(6)
+        self.lon_label = QLabel("Lon:")
+        act_layout.addRow(self.lon_label, self.lon_spin)
+        
+        layout.addWidget(grp_action)
+        
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(self.on_ok)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+    def populate_ships(self, combo, include_own=True):
+        combo.clear()
+        if include_own:
+             combo.addItem(f"Own Ship (Default)", -1)
              
-        self.spin_dist_val = QDoubleSpinBox()
-        self.spin_dist_val.setRange(0, 1000000) # Max 1000km
-        self.spin_dist_val.setSuffix(" m")
-        
-        self.combo_dist_cond = QComboBox()
-        self.combo_dist_cond.addItems(["UNDER (Distance < Value)", "OVER (Distance > Value)"])
-        
-        l_dist.addRow("Target Ship:", self.combo_dist_target_ship)
-        l_dist.addRow("Distance:", self.spin_dist_val)
-        l_dist.addRow("Condition:", self.combo_dist_cond)
-        
-        self.stack_trigger_params.addWidget(p_dist)
+        own_idx = current_project.settings.own_ship_idx
+        for s in current_project.ships:
+            tag = "Own" if s.idx == own_idx else ("R" if s.idx >= 1000 else "T")
+            combo.addItem(f"[{tag}] {s.name}", s.idx)
 
-        main_layout.addWidget(grp_trig)
-        
-        # Action Group
-        grp_act = QGroupBox("Action")
-        l_act = QFormLayout(grp_act)
-        
-        # Populate Target Ships
-        for ship in current_project.ships:
-            self.combo_target_ship.addItem(f"{ship.name} (ID: {ship.idx})", ship.idx)
-            
-        l_act.addRow("Apply to Ship:", self.combo_target_ship)
-        l_act.addRow("Action Type:", self.combo_action_type)
-        l_act.addRow("Value:", self.spin_action_val)
-        
-        main_layout.addWidget(grp_act)
-        
-        # Buttons
-        btn_box = QHBoxLayout()
-        btn_ok = QPushButton("OK")
-        btn_cancel = QPushButton("Cancel")
-        btn_ok.clicked.connect(self.accept_data)
-        btn_cancel.clicked.connect(self.reject)
-        btn_box.addStretch()
-        btn_box.addWidget(btn_ok)
-        btn_box.addWidget(btn_cancel)
-        main_layout.addLayout(btn_box)
-        
-        self.combo_trigger_type.currentIndexChanged.connect(self.update_ui_state)
-        self.update_ui_state()
+    def populate_areas(self):
+        self.area_combo.clear()
+        for a in current_project.areas:
+            self.area_combo.addItem(a.name, a.id)
 
-    def update_ui_state(self):
-        idx = self.combo_trigger_type.currentIndex()
-        self.stack_trigger_params.setCurrentIndex(idx)
+    def update_trigger_ui(self):
+        ttype = self.trigger_type_combo.currentText()
+        
+        self.ref_ship_combo.setVisible(False)
+        self.ref_ship_label.setVisible(False)
+        self.area_combo.setVisible(False)
+        self.area_label.setVisible(False)
+        self.condition_val_spin.setVisible(False)
+        self.condition_val_label.setVisible(False)
+        
+        if ttype == "TIME":
+            self.condition_val_label.setText("Seconds:")
+            self.condition_val_spin.setVisible(True)
+            self.condition_val_label.setVisible(True)
+        elif "AREA" in ttype:
+            self.area_combo.setVisible(True)
+            self.area_label.setVisible(True)
+        elif "DIST" in ttype or "CPA" in ttype:
+            self.ref_ship_combo.setVisible(True)
+            self.ref_ship_label.setVisible(True)
+            self.condition_val_label.setText("Dist(NM)/Time(min):")
+            self.condition_val_spin.setVisible(True)
+            self.condition_val_label.setVisible(True)
 
-    def load_data(self):
-        self.edt_name.setText(self.event.name)
+    def update_action_ui(self):
+        atype = self.action_type_combo.currentText()
+        self.action_val_spin.setVisible(False)
+        self.action_val_label.setVisible(False)
+        self.action_opt_combo.setVisible(False)
+        self.action_opt_label.setVisible(False)
+        self.lat_spin.setVisible(False)
+        self.lat_label.setVisible(False)
+        self.lon_spin.setVisible(False)
+        self.lon_label.setVisible(False)
         
-        # Trigger Type
-        if self.event.trigger_type == Event.TRIGGER_TIME:
-            self.combo_trigger_type.setCurrentIndex(0)
-        elif self.event.trigger_type == Event.TRIGGER_AREA_ENTER:
-            self.combo_trigger_type.setCurrentIndex(1)
-        elif self.event.trigger_type == Event.TRIGGER_AREA_LEAVE:
-            self.combo_trigger_type.setCurrentIndex(2)
-        elif self.event.trigger_type == Event.TRIGGER_DISTANCE:
-            self.combo_trigger_type.setCurrentIndex(3)
-            
-        # Trigger Params
-        self.spin_trig_time.setValue(self.event.trigger_time)
-        
-        # Set Area combos
-        idx = self.combo_trig_area.findData(self.event.trigger_area_id)
-        if idx >= 0: self.combo_trig_area.setCurrentIndex(idx)
-        
-        idx2 = self.combo_trig_area2.findData(self.event.trigger_area_id)
-        if idx2 >= 0: self.combo_trig_area2.setCurrentIndex(idx2)
-        
-        # [추가] Distance Params
-        d_idx = self.combo_dist_target_ship.findData(self.event.trigger_target_ship_idx)
-        if d_idx >= 0: self.combo_dist_target_ship.setCurrentIndex(d_idx)
-        self.spin_dist_val.setValue(self.event.trigger_distance)
-        if self.event.trigger_condition == "OVER":
-            self.combo_dist_cond.setCurrentIndex(1)
-        else:
-            self.combo_dist_cond.setCurrentIndex(0)
+        if atype == "CHANGE_SPEED":
+            self.action_val_label.setText("Speed (kn):")
+            self.action_val_spin.setRange(0, 10000) 
+            self.action_val_spin.setVisible(True)
+            self.action_val_label.setVisible(True)
+        elif atype == "CHANGE_HEADING":
+            self.action_val_label.setText("Heading (deg):")
+            self.action_val_spin.setRange(0, 360)
+            self.action_val_spin.setVisible(True)
+            self.action_val_label.setVisible(True)
+        elif atype == "MANEUVER":
+            self.action_opt_combo.setVisible(True)
+            self.action_opt_label.setVisible(True)
+        elif atype == "CHANGE_DESTINATION_LOC":
+            self.lat_spin.setVisible(True)
+            self.lat_label.setVisible(True)
+            self.lon_spin.setVisible(True)
+            self.lon_label.setVisible(True)
 
-        # Action Params
-        t_idx = self.combo_target_ship.findData(self.event.target_ship_idx)
-        if t_idx >= 0: self.combo_target_ship.setCurrentIndex(t_idx)
+    def load_event(self):
+        self.name_edit.setText(self.event.name)
+        self.enabled_chk.setChecked(self.event.enabled)
         
-        if self.event.action_type == Event.ACTION_CHANGE_SPEED:
-            self.combo_action_type.setCurrentIndex(0)
-        elif self.event.action_type == Event.ACTION_CHANGE_HEADING:
-            self.combo_action_type.setCurrentIndex(1)
-        elif self.event.action_type == Event.ACTION_STOP:
-            self.combo_action_type.setCurrentIndex(2)
+        idx = self.target_ship_combo.findData(self.event.target_ship_idx)
+        if idx >= 0: self.target_ship_combo.setCurrentIndex(idx)
+        
+        self.trigger_type_combo.setCurrentText(self.event.trigger_type)
+        self.update_trigger_ui()
+        
+        if self.event.trigger_type in ["TIME", "DIST_UNDER", "DIST_OVER", "CPA_UNDER", "CPA_OVER"]:
+            self.condition_val_spin.setValue(self.event.condition_value)
+        elif "AREA" in self.event.trigger_type:
+            idx = self.area_combo.findData(int(self.event.condition_value))
+            if idx >= 0: self.area_combo.setCurrentIndex(idx)
             
-        self.spin_action_val.setValue(self.event.action_value)
+        idx = self.ref_ship_combo.findData(self.event.reference_ship_idx)
+        if idx >= 0: self.ref_ship_combo.setCurrentIndex(idx)
+        
+        self.action_type_combo.setCurrentText(self.event.action_type)
+        self.update_action_ui()
+        
+        if self.event.action_type in ["CHANGE_SPEED", "CHANGE_HEADING"]:
+            self.action_val_spin.setValue(self.event.action_value)
+        elif self.event.action_type == "MANEUVER":
+            idx = self.action_opt_combo.findText(self.event.action_option)
+            if idx >= 0: self.action_opt_combo.setCurrentIndex(idx)
+        elif self.event.action_type == "CHANGE_DESTINATION_LOC":
+            try:
+                lat, lon = map(float, self.event.action_option.split(","))
+                self.lat_spin.setValue(lat)
+                self.lon_spin.setValue(lon)
+            except:
+                pass
 
-    def accept_data(self):
-        # Save to self.event
-        self.event.name = self.edt_name.text()
-        
-        t_idx = self.combo_trigger_type.currentIndex()
-        if t_idx == 0:
-            self.event.trigger_type = Event.TRIGGER_TIME
-            self.event.trigger_time = self.spin_trig_time.value()
-        elif t_idx == 1:
-            self.event.trigger_type = Event.TRIGGER_AREA_ENTER
-            self.event.trigger_area_id = self.combo_trig_area.currentData()
-        elif t_idx == 2:
-            self.event.trigger_type = Event.TRIGGER_AREA_LEAVE
-            self.event.trigger_area_id = self.combo_trig_area2.currentData()
-        elif t_idx == 3: # [추가] Distance
-            self.event.trigger_type = Event.TRIGGER_DISTANCE
-            self.event.trigger_target_ship_idx = self.combo_dist_target_ship.currentData()
-            self.event.trigger_distance = self.spin_dist_val.value()
-            self.event.trigger_condition = "OVER" if self.combo_dist_cond.currentIndex() == 1 else "UNDER"
+    def on_ok(self):
+        name = self.name_edit.text().strip()
+        if not name:
+            QMessageBox.warning(self, "Error", "Name required")
+            return
             
-        # Action
-        self.event.target_ship_idx = self.combo_target_ship.currentData()
-        a_idx = self.combo_action_type.currentIndex()
-        if a_idx == 0:
-            self.event.action_type = Event.ACTION_CHANGE_SPEED
-        elif a_idx == 1:
-            self.event.action_type = Event.ACTION_CHANGE_HEADING
-        elif a_idx == 2:
-            self.event.action_type = Event.ACTION_STOP
-            
-        self.event.action_value = self.spin_action_val.value()
+        if not self.event:
+            self.event = SimEvent(str(uuid.uuid4()), name)
         
+        self.event.name = name
+        self.event.enabled = self.enabled_chk.isChecked()
+        self.event.target_ship_idx = self.target_ship_combo.currentData()
+        self.event.trigger_type = self.trigger_type_combo.currentText()
+        
+        if self.event.trigger_type in ["TIME", "DIST_UNDER", "DIST_OVER", "CPA_UNDER", "CPA_OVER"]:
+            self.event.condition_value = self.condition_val_spin.value()
+        elif "AREA" in self.event.trigger_type:
+            self.event.condition_value = float(self.area_combo.currentData())
+            
+        self.event.reference_ship_idx = self.ref_ship_combo.currentData()
+        
+        self.event.action_type = self.action_type_combo.currentText()
+        if self.event.action_type in ["CHANGE_SPEED", "CHANGE_HEADING"]:
+            self.event.action_value = self.action_val_spin.value()
+        elif self.event.action_type == "MANEUVER":
+            self.event.action_option = self.action_opt_combo.currentText()
+        elif self.event.action_type == "CHANGE_DESTINATION_LOC":
+            self.event.action_option = f"{self.lat_spin.value()},{self.lon_spin.value()}"
+            
         self.accept()
+
+    def get_event(self):
+        return self.event

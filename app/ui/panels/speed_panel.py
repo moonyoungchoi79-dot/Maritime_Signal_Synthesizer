@@ -11,7 +11,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas,
 from matplotlib.figure import Figure
 import matplotlib.ticker as ticker
 from app.core.models.project import current_project
-from app.core.geometry import vincenty_distance, pixel_to_coords
+from app.core.geometry import haversine_distance, pixel_to_coords
 
 class SpeedGeneratorPanel(QWidget):
     request_generate = pyqtSignal()
@@ -230,7 +230,7 @@ class SpeedGeneratorPanel(QWidget):
                  
                  dist_cum = [0]
                  for i in range(1, len(lats)):
-                     d = vincenty_distance(lats[i-1], lons[i-1], lats[i], lons[i])
+                     d = haversine_distance(lats[i-1], lons[i-1], lats[i], lons[i])
                      dist_cum.append(dist_cum[-1] + d)
                  
                  total_d = dist_cum[-1] if dist_cum[-1] > 0 else 1
