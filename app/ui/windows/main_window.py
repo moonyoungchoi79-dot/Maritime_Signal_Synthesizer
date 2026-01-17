@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QLineEdit, QTextEdit, QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox,
     QSlider, QProgressBar, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem,
     QHeaderView, QTreeWidget, QTreeWidgetItem, QTabWidget, QTabBar, QStyleOptionTab,
-    QStackedWidget, QGroupBox, QFrame, QSplitter, QScrollArea, QMessageBox, QFileDialog,
+    QStackedWidget, QGroupBox, QFrame, QSplitter, QScrollArea, QFileDialog,
     QColorDialog, QInputDialog, QDialog, QDialogButtonBox, QMenuBar, QMenu,
     QToolBar, QStatusBar, QGraphicsView, QGraphicsScene, QGraphicsItem, QGraphicsPathItem, QDockWidget,
     QGraphicsPolygonItem, QGraphicsEllipseItem, QGraphicsTextItem, QAbstractItemView,
@@ -47,6 +47,7 @@ from app.ui.dialogs.help_dialog import HelpDialog
 from app.ui.panels.simulation_panel import SimulationPanel
 from app.ui.panels.event_panel import EventScriptPanel
 from app.ui.panels.scenario_panel import ScenarioPanel
+from app.ui.widgets import message_box as msg
 import app.core.state as app_state
 
 class ColoredTabBar(QTabBar):
@@ -273,6 +274,9 @@ class MainWindow(QMainWindow):
             QLabel#boldLbl {{ }}
             
             QTabWidget::pane {{ border: 1px solid {border_color}; }}
+
+            QMessageBox {{ min-height: 30px; }}
+            QMessageBox QLabel {{ min-height: 35px; }}
         """)
         
         if hasattr(self, 'lbl_coords'):
@@ -345,8 +349,10 @@ class MainWindow(QMainWindow):
         main_h.setSpacing(15) 
         
         left_widget = QWidget()
+        left_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         left_v = QVBoxLayout(left_widget)
         left_v.setContentsMargins(0,0,0,0)
+        left_v.setSpacing(2)
         
         tb = QToolBar()
         tb.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
@@ -388,8 +394,9 @@ class MainWindow(QMainWindow):
         
         self.scene = QGraphicsScene()
         self.view = MapView(self.scene, self)
-        left_v.addWidget(self.view)
-        
+        self.view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        left_v.addWidget(self.view, 1)  # stretch factor 1 to take all available space
+
         main_h.addWidget(left_widget, 3)
         
         right_widget = QWidget()
@@ -433,7 +440,9 @@ class MainWindow(QMainWindow):
         
         self.lbl_coords = QLabel("Lat: 0.00000 Lon: 0.00000")
         self.lbl_coords.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        left_v.addWidget(self.lbl_coords)
+        self.lbl_coords.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.lbl_coords.setMinimumHeight(25)
+        left_v.addWidget(self.lbl_coords, 0)  # stretch factor 0 to keep fixed size
         
         self.view.coord_changed.connect(self.update_status)
         self.update_stylesheets()
@@ -546,6 +555,7 @@ class MainWindow(QMainWindow):
                 self.data_table.setItem(i, 4, item)
 
             self.data_table.setItem(i, 5, QTableWidgetItem(str(ship.mmsi)))
+            self.data_table.setRowHeight(i, 60)  # 2x default row height
         self.data_table.blockSignals(False)
 
     def show_struct_table(self, sid):
@@ -564,6 +574,7 @@ class MainWindow(QMainWindow):
             self.data_table.setItem(i, 0, QTableWidgetItem(str(i)))
             self.data_table.setItem(i, 1, QTableWidgetItem(f"{lat:.6f}"))
             self.data_table.setItem(i, 2, QTableWidgetItem(f"{normalize_lon(lon):.6f}"))
+            self.data_table.setRowHeight(i, 60)  # 2x default row height
         self.data_table.blockSignals(False)
 
     def on_table_changed(self, item):
@@ -612,7 +623,7 @@ class MainWindow(QMainWindow):
     def delete_checked_points(self):
         txt = self.obj_combo.currentText()
         if "[Ship]" not in txt:
-            QMessageBox.warning(self, "Warning", "Select a Ship first.")
+            msg.show_warning(self, "Warning", "Select a Ship first.")
             return
 
         sid = self.obj_combo.currentData()
@@ -626,11 +637,10 @@ class MainWindow(QMainWindow):
                 rows_to_del.append(row)
         
         if not rows_to_del:
-            QMessageBox.information(self, "Info", "No points selected.")
+            msg.show_information(self, "Info", "No points selected.")
             return
 
-        if QMessageBox.question(self, "Delete", f"Delete {len(rows_to_del)} points?", 
-                                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) == QMessageBox.StandardButton.No:
+        if msg.show_question(self, "Delete", f"Delete {len(rows_to_del)} points?") == msg.StandardButton.No:
             return
 
         rows_to_del.sort(reverse=True)
@@ -791,7 +801,7 @@ class MainWindow(QMainWindow):
     def add_point_click(self, px, py):
         txt = self.obj_combo.currentText()
         if "[Ship]" not in txt:
-            QMessageBox.warning(self, "Warning", "Please select a Ship first.")
+            msg.show_warning(self, "Warning", "Please select a Ship first.")
             self.set_map_mode("SELECT")
             return
         
@@ -800,7 +810,7 @@ class MainWindow(QMainWindow):
         _, _, lat, _ = pixel_to_coords(px, py, mi) # Only need lat for validation
 
         if not (-90 <= lat <= 90):
-            QMessageBox.warning(self, "Invalid Latitude", "Latitude must be between -90 and +90 degrees. This point will not be saved.")
+            msg.show_warning(self, "Invalid Latitude", "Latitude must be between -90 and +90 degrees. This point will not be saved.")
             self.set_map_mode("SELECT") # Go back to select mode after warning
             return # Exit the function without adding the point
         # --- Latitude Validation End ---
@@ -838,7 +848,7 @@ class MainWindow(QMainWindow):
     def req_add_point(self):
         txt = self.obj_combo.currentText()
         if "[Ship]" not in txt:
-            QMessageBox.warning(self, "Warning", "Please select a Ship first.")
+            msg.show_warning(self, "Warning", "Please select a Ship first.")
             return
 
         dlg = QDialog(self)
@@ -931,9 +941,7 @@ class MainWindow(QMainWindow):
                 self.lbl_dur.setText(f"Duration: {dur_str}")
 
     def delete_points(self, s_idx, p_idx):
-        if QMessageBox.question(self, "Delete", "Delete this point and all subsequent points?", 
-                                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, 
-                                QMessageBox.StandardButton.No) == QMessageBox.StandardButton.No:
+        if msg.show_question(self, "Delete", "Delete this point and all subsequent points?") == msg.StandardButton.No:
             return
 
         ship = current_project.get_ship_by_idx(s_idx)
@@ -998,7 +1006,7 @@ class MainWindow(QMainWindow):
     def change_area_color(self):
         txt = self.obj_combo.currentText()
         if "[Area]" not in txt:
-            QMessageBox.information(self, "Info", "Please select an Area.")
+            msg.show_information(self, "Info", "Please select an Area.")
             return
         sid = self.obj_combo.currentData()
         area = current_project.get_area_by_id(sid)
@@ -1235,7 +1243,7 @@ class MainWindow(QMainWindow):
 
         except Exception as e:
             traceback.print_exc()
-            QMessageBox.critical(self, "Error Loading Project", str(e))
+            msg.show_critical(self, "Error Loading Project", str(e))
 
     def save_project(self):
         p = current_project
@@ -1360,13 +1368,12 @@ class MainWindow(QMainWindow):
         try:
             with open(full_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=4)
-            QMessageBox.information(self, "Saved", f"Project Saved to:\n{fname}")
+            msg.show_information(self, "Saved", f"Project Saved to:\n{fname}")
         except Exception as e:
-            QMessageBox.critical(self, "Error Saving", str(e))
+            msg.show_critical(self, "Error Saving", str(e))
 
     def clear_cache(self):
-        if QMessageBox.question(self, "Clear Cache", "Delete all __pycache__ folders in the project?\n(They will be regenerated automatically)", 
-                                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+        if msg.show_question(self, "Clear Cache", "Delete all __pycache__ folders in the project?\n(They will be regenerated automatically)") != msg.StandardButton.Yes:
             return
             
         base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -1377,7 +1384,7 @@ class MainWindow(QMainWindow):
                     shutil.rmtree(os.path.join(root, "__pycache__"))
                     count += 1
                 except: pass
-        QMessageBox.information(self, "Done", f"Deleted {count} cache directories.")
+        msg.show_information(self, "Done", f"Deleted {count} cache directories.")
 
     def add_ship_dialog(self):
         idx = 0
@@ -1405,13 +1412,11 @@ class MainWindow(QMainWindow):
     def delete_object(self):
         txt = self.obj_combo.currentText()
         sid = self.obj_combo.currentData()
-        
-        msg = "Are you sure you want to delete this Object?"
+
+        delete_msg = "Are you sure you want to delete this Object?"
         if "[Ship]" in txt:
-            msg += "\nPath, Speed, Duration data will be lost."
-        if QMessageBox.question(self, "Delete Object", msg, 
-                                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, 
-                                QMessageBox.StandardButton.No) == QMessageBox.StandardButton.No:
+            delete_msg += "\nPath, Speed, Duration data will be lost."
+        if msg.show_question(self, "Delete Object", delete_msg) == msg.StandardButton.No:
             return
         
         if "[Ship]" in txt:
@@ -1526,18 +1531,18 @@ class MainWindow(QMainWindow):
         self.obj_combo.setEnabled(enabled)
 
     def closeEvent(self, event):
-        reply = QMessageBox.question(
-            self, 
-            "Save Project", 
+        reply = msg.show_question(
+            self,
+            "Save Project",
             "Do you want to save the project?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel
+            msg.StandardButton.Yes | msg.StandardButton.No | msg.StandardButton.Cancel
         )
 
-        if reply == QMessageBox.StandardButton.Yes:
+        if reply == msg.StandardButton.Yes:
             self.sim_panel.cleanup()
             self.save_project()
             event.accept()
-        elif reply == QMessageBox.StandardButton.No:
+        elif reply == msg.StandardButton.No:
             self.sim_panel.cleanup()
             event.accept()
         else:

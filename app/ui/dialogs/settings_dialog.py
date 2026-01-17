@@ -26,11 +26,11 @@ class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.resize(900, 520)
+        self.resize(1260, 728)
         
         main_h = QHBoxLayout(self)
         self.list_widget = QListWidget()
-        self.list_widget.addItems(["Appearance", "Reception Model", "Object", "Signal", "Simulation"])
+        self.list_widget.addItems(["Appearance", "Reception Model", "Object", "Signal"])
         self.list_widget.setFixedWidth(150)
         
         line = QFrame()
@@ -47,7 +47,6 @@ class SettingsDialog(QDialog):
         self.init_dropout()
         self.init_object()
         self.init_signal()
-        self.init_simulation()
         
         self.list_widget.currentRowChanged.connect(self.stack.setCurrentIndex)
         
@@ -748,20 +747,10 @@ class SettingsDialog(QDialog):
                 self.signal_noise_table.setCellWidget(r, c, spin)
 
         self.signal_noise_table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        self.signal_noise_table.setColumnWidth(0, 40)
-        self.signal_noise_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        for i in range(1, self.signal_noise_table.columnCount()):
+        for i in range(self.signal_noise_table.columnCount()):
             self.signal_noise_table.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeMode.Stretch)
         
         layout.addWidget(self.signal_noise_table)
-        self.stack.addWidget(w)
-
-    def init_simulation(self):
-        w = QWidget()
-        l = QFormLayout(w)
-
-        # Placeholder - simulation settings can be added here in the future
-
         self.stack.addWidget(w)
 
     def _create_signal_noise_cell(self, value):

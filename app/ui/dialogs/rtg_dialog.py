@@ -8,7 +8,7 @@ class RTGDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Random Target Generate Settings")
-        self.resize(300, 200)
+        self.resize(420, 280)
         
         l = QFormLayout(self)
         

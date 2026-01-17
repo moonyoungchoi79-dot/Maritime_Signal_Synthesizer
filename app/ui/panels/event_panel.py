@@ -1,10 +1,10 @@
 import uuid
 
 from PyQt6.QtWidgets import (
-    QWidget, QHBoxLayout, QSpinBox, QDoubleSpinBox, QVBoxLayout, QListWidget, 
-    QAbstractItemView, QPushButton, QGroupBox, QFormLayout, QLineEdit, QCheckBox, 
+    QWidget, QHBoxLayout, QSpinBox, QDoubleSpinBox, QVBoxLayout, QListWidget,
+    QAbstractItemView, QPushButton, QGroupBox, QFormLayout, QLineEdit, QCheckBox,
     QComboBox, QLabel, QListWidgetItem, QTableWidget, QHeaderView, QTableWidgetItem,
-    QFrame
+    QFrame, QScrollArea
 )
 from PyQt6.QtCore import (
     Qt
@@ -19,9 +19,19 @@ from app.ui.panels.scenario_panel import ScenarioPanel
 class EventScriptPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        
-        layout = QHBoxLayout(self)
-        
+
+        outer_layout = QHBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Scroll Area for entire panel
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        scroll_content = QWidget()
+        layout = QHBoxLayout(scroll_content)
+
         # Left: List of Events
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
@@ -126,7 +136,10 @@ class EventScriptPanel(QWidget):
         form.addRow(btn_save)
         
         layout.addWidget(self.editor_group, 2)
-        
+
+        scroll.setWidget(scroll_content)
+        outer_layout.addWidget(scroll)
+
         self.current_event_id = None
         self.refresh_table()
         self.update_filter_combo()
@@ -178,7 +191,10 @@ class EventScriptPanel(QWidget):
     def refresh_table(self):
         self.event_table.blockSignals(True)
         self.event_table.setRowCount(0)
-        
+
+        # Set to 2x default row height
+        default_row_height = self.event_table.verticalHeader().defaultSectionSize()
+
         prio_data = self.combo_priority.currentData()
         sort_crit = self.combo_sort.currentText()
         
@@ -211,28 +227,31 @@ class EventScriptPanel(QWidget):
             if not e.enabled:
                 name_item.setForeground(QBrush(Qt.GlobalColor.gray))
             self.event_table.setItem(row, 0, name_item)
-            
+
             # Enabled
             self.event_table.setItem(row, 1, QTableWidgetItem("Yes" if e.enabled else "No"))
-            
+
             # Trigger
             self.event_table.setItem(row, 2, QTableWidgetItem(e.trigger_type))
-            
+
             # Condition
             cond_str = f"{e.condition_value}"
             if e.trigger_type == "TIME": cond_str += "s"
             elif e.trigger_type in ["CPA_UNDER", "CPA_OVER"]: cond_str += "NM"
             elif e.trigger_type in ["DIST_UNDER", "DIST_OVER"]: cond_str += "nm"
             self.event_table.setItem(row, 3, QTableWidgetItem(cond_str))
-            
+
             # Action
             self.event_table.setItem(row, 4, QTableWidgetItem(e.action_type))
-            
+
             # Target Ship
             ship = current_project.get_ship_by_idx(e.target_ship_idx)
             ship_name = ship.name if ship else f"ID:{e.target_ship_idx}"
             self.event_table.setItem(row, 5, QTableWidgetItem(ship_name))
-            
+
+            # Set row height to 2x
+            self.event_table.setRowHeight(row, default_row_height * 2)
+
         self.event_table.blockSignals(False)
 
     def add_event(self):
@@ -469,13 +488,13 @@ class EventScriptPanel(QWidget):
         evt.reference_ship_idx = self.combo_ref.currentData()
         evt.action_value = self.spin_action_val.value()
 
-        # ID 유지 - triggered_events에서 제거하여 재평가 가능하게 함
-        # (ID 재생성 시 prerequisite_events 참조가 깨지는 문제 방지)
+        # Keep ID - remove from triggered_events for re-evaluation
+        # (Prevents breaking prerequisite_events references when ID is regenerated)
         main_win = self.window()
         if hasattr(main_win, 'worker') and main_win.worker:
             main_win.worker.reset_triggered_event(evt.id)
 
-        # Scenario의 이벤트도 동기화 (양방향 동기화)
+        # Sync with Scenario events (bidirectional sync)
         from app.core.state import loaded_scenarios
         for scen in loaded_scenarios:
             for scen_evt in scen.events:
@@ -490,7 +509,7 @@ class EventScriptPanel(QWidget):
                     scen_evt.reference_ship_idx = evt.reference_ship_idx
                     scen_evt.action_value = evt.action_value
                     scen_evt.is_relative_to_end = getattr(evt, 'is_relative_to_end', False)
-                    # 조건부 이벤트도 동기화
+                    # Sync conditional events too
                     scen_evt.prerequisite_logic = getattr(evt, 'prerequisite_logic', 'AND')
                     scen_evt.prerequisite_events = getattr(evt, 'prerequisite_events', [])
 

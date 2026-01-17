@@ -7,12 +7,12 @@ import re
 import numpy as np
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, 
-    QTextEdit, QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox, QTableWidget, 
-    QHeaderView, QGroupBox, QMessageBox, QFileDialog, QDialog, QGraphicsScene, QListWidget,
-    QGraphicsItem, QGraphicsPathItem, QGraphicsPolygonItem, QGraphicsEllipseItem, 
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit,
+    QTextEdit, QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox, QTableWidget,
+    QHeaderView, QGroupBox, QFileDialog, QDialog, QGraphicsScene, QListWidget,
+    QGraphicsItem, QGraphicsPathItem, QGraphicsPolygonItem, QGraphicsEllipseItem,
     QGraphicsTextItem, QAbstractSpinBox, QMenu, QGraphicsRectItem, QFormLayout, QInputDialog, QTabWidget,
-    QGridLayout
+    QGridLayout, QScrollArea
 )
 from PyQt6.QtCore import (
     Qt, pyqtSignal, QThread, QTimer, QPointF
@@ -33,6 +33,7 @@ from app.workers.simulation_worker import SimulationWorker
 from app.ui.map.sim_map_view import SimMapView
 from app.ui.dialogs.rtg_dialog import RTGDialog
 from app.ui.widgets.time_input_widget import TimeInputWidget
+from app.ui.widgets import message_box as msgbox
 import app.core.state as app_state
 
 class TargetInfoDialog(QDialog):
@@ -268,7 +269,7 @@ class SimulationPanel(QWidget):
 
             own_ship = current_project.get_ship_by_idx(current_project.settings.own_ship_idx)
             if not own_ship:
-                QMessageBox.warning(self, "Warning", "Own Ship is not set. Cannot generate random targets.")
+                msgbox.show_warning(self, "Warning", "Own Ship is not set. Cannot generate random targets.")
                 return
 
             self.generate_random_targets_logic(own_ship, R, N_AI_only, N_RA_only, N_both)
@@ -276,11 +277,10 @@ class SimulationPanel(QWidget):
     def action_clear_random_targets(self):
         targets = [s for s in current_project.ships if s.idx >= 1000]
         if not targets:
-            QMessageBox.information(self, "Info", "No random targets to delete.")
+            msgbox.show_information(self, "Info", "No random targets to delete.")
             return
 
-        if QMessageBox.question(self, "Clear Random Targets", f"Delete {len(targets)} random targets?", 
-                                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+        if msgbox.show_question(self, "Clear Random Targets", f"Delete {len(targets)} random targets?") != msgbox.StandardButton.Yes:
             return
 
         current_project.ships = [s for s in current_project.ships if s.idx < 1000]
@@ -400,7 +400,13 @@ class SimulationPanel(QWidget):
         self.view.mode = "VIEW"
         self.view.view_changed.connect(self.update_pen_widths)
         mid_layout.addWidget(self.view, 3)
-        
+
+        # Right panel with scroll
+        right_scroll = QScrollArea()
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        right_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
@@ -414,7 +420,8 @@ class SimulationPanel(QWidget):
         self.edit_status_filter.textChanged.connect(self.emit_simulation_status)
         
         self.list_active_events = QListWidget()
-        self.list_active_events.setFixedHeight(80)
+        self.list_active_events.setMinimumHeight(60)
+        self.list_active_events.setMaximumHeight(200)
         self.list_active_events.itemDoubleClicked.connect(self.on_event_list_double_clicked)
         status_layout.addWidget(self.lbl_active_scen)
         status_layout.addWidget(self.edit_status_filter)
@@ -497,7 +504,9 @@ class SimulationPanel(QWidget):
         self.info_tabs.addTab(log_tab, "Log")
         self.info_tabs.addTab(graph_tab, "Speed Graph")
         right_layout.addWidget(self.info_tabs, 1)
-        mid_layout.addWidget(right_panel, 1)
+
+        right_scroll.setWidget(right_panel)
+        mid_layout.addWidget(right_scroll, 1)
         layout.addWidget(mid_widget)
         
         self.draw_static_map()
@@ -537,7 +546,7 @@ class SimulationPanel(QWidget):
         return new_lat, new_lon, new_hdg
 
     def generate_random_targets_logic(self, own_ship, R_nm, N_ai, N_ra, N_both, area_id=-1):
-        import numpy as np # 고속 연산을 위한 NumPy 사용
+        import numpy as np # NumPy for high-speed computation
 
         seed_val = (current_project.seed + len(current_project.ships)) % (2**32 - 1)
         random.seed(seed_val)
@@ -574,7 +583,7 @@ class SimulationPanel(QWidget):
 
         R_deg_lat = R_nm / 60.0
         
-        # 최적화를 위해 좌표 변환 함수를 지역 변수에 바인딩
+        # Bind coordinate conversion function to local variable for optimization
         ctp = coords_to_pixel
         
         for i in range(total_targets):
@@ -582,7 +591,7 @@ class SimulationPanel(QWidget):
             elif i < N_ai + N_ra: s_type = "RA"
             else: s_type = "BOTH"
             
-            # --- 1. 시작 위치 생성 (Start Position Generation) ---
+            # --- 1. Start Position Generation ---
             if target_area_poly:
                 found = False
                 for _ in range(200):
@@ -609,7 +618,7 @@ class SimulationPanel(QWidget):
             
             start_lat = max(-89.9, min(89.9, start_lat))
             
-            # --- 2. 속도 및 헤딩 설정 ---
+            # --- 2. Speed and Heading Setup ---
             variance = current_project.settings.speed_variance
             sigma = math.sqrt(variance)
             spd = abs(random.gauss(own_spd_kn, sigma)) 
@@ -617,53 +626,53 @@ class SimulationPanel(QWidget):
             
             heading = random.random() * 360.0
             
-            # --- 3. [최적화됨] NumPy를 이용한 대권 항로 일괄 계산 ---
-            duration_remaining = 24 * 3600.0 
-            dt = 60.0 # 60초 간격
-            
-            # 시간 및 이동 거리 배열 생성 (Vectorization)
+            # --- 3. [Optimized] Batch Great Circle Route Calculation with NumPy ---
+            duration_remaining = 24 * 3600.0
+            dt = 60.0 # 60 second interval
+
+            # Generate time and distance arrays (Vectorization)
             times = np.arange(0, duration_remaining, dt)
             spd_mps = spd * 0.514444 # Knots to m/s
-            dists_m = times * spd_mps 
-            
-            # 초기 위치 및 헤딩 (Radians)
+            dists_m = times * spd_mps
+
+            # Initial position and heading (Radians)
             lat1_rad = math.radians(start_lat)
             lon1_rad = math.radians(start_lon)
             hdg_rad = math.radians(heading)
             R_earth = 6371000.0
-            
-            # 각 거리 (Angular distances)
+
+            # Angular distances
             ang_dists = dists_m / R_earth
-            
-            # 대권 항로 공식 (Direct Geodesic on Sphere) - for loop 제거됨
+
+            # Great Circle Route Formula (Direct Geodesic on Sphere) - for loop removed
             sin_lat1 = math.sin(lat1_rad)
             cos_lat1 = math.cos(lat1_rad)
             cos_hdg = math.cos(hdg_rad)
             sin_hdg = math.sin(hdg_rad)
-            
+
             sin_ang_dists = np.sin(ang_dists)
             cos_ang_dists = np.cos(ang_dists)
-            
-            # 위도(Latitude) 일괄 계산
+
+            # Batch latitude calculation
             lat2_rads = np.arcsin(sin_lat1 * cos_ang_dists + cos_lat1 * sin_ang_dists * cos_hdg)
-            
-            # 경도(Longitude) 일괄 계산
+
+            # Batch longitude calculation
             y = sin_hdg * sin_ang_dists * cos_lat1
             x = cos_ang_dists - sin_lat1 * np.sin(lat2_rads)
             lon2_rads = lon1_rad + np.arctan2(y, x)
-            
-            # 라디안 -> 도(Degrees) 변환
+
+            # Radians to degrees conversion
             lats_deg = np.degrees(lat2_rads)
             lons_deg = np.degrees(lon2_rads)
-            
-            # 범위 제한 및 정규화
+
+            # Range limiting and normalization
             lats_deg = np.clip(lats_deg, -89.9, 89.9)
             lons_deg = (lons_deg + 180) % 360 - 180
-            
-            # 픽셀 변환 (List Comprehension이 일반 for loop보다 빠름)
+
+            # Pixel conversion (List Comprehension is faster than regular for loop)
             raw_pixels = [ctp(lat, lon, mi) for lat, lon in zip(lats_deg, lons_deg)]
 
-            # --- 4. 선박 객체 생성 ---
+            # --- 4. Create Ship Object ---
             new_idx = 1001
             existing_idxs = {s.idx for s in current_project.ships}
             while new_idx in existing_idxs: new_idx += 1
@@ -760,13 +769,23 @@ class SimulationPanel(QWidget):
                 checkbox.stateChanged.connect(self.on_signal_on_off_toggled)
                 table.setCellWidget(r, c, widget)
 
-        table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        # Set row height and calculate total table height
+        row_height = 60  # Each row height (2x default)
+        for r in range(table.rowCount()):
+            table.setRowHeight(r, row_height)
+
         for i in range(1, table.columnCount()):
             table.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeMode.Stretch)
         table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-                
+
+        # Calculate total table height (header + all rows + margin)
+        header_height = table.horizontalHeader().height()
+        total_height = header_height + (row_height * table.rowCount()) + 4
+        table.setFixedHeight(total_height)
+        table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
         return table
-        
+
     def _create_on_off_cell(self, is_checked):
         widget = QWidget()
         layout = QHBoxLayout(widget)
@@ -841,31 +860,39 @@ class SimulationPanel(QWidget):
         ships = [s for s in current_project.ships if s.idx != current_project.settings.own_ship_idx]
 
         table.setRowCount(len(ships) + 1)
-        table.setColumnCount(len(talkers) + 1)
+        table.setColumnCount(len(talkers))
 
-        table.setHorizontalHeaderLabels(["Ctrl"] + talkers)
+        table.setHorizontalHeaderLabels(talkers)
         table.setVerticalHeaderLabels(["ALL"] + [s.name for s in ships])
 
         for r in range(table.rowCount()):
             for c in range(table.columnCount()):
                 val = 1.0
-                if r > 0 and c > 0:
+                if r > 0:
                     ship = ships[r - 1]
-                    talker = talkers[c - 1]
+                    talker = talkers[c]
                     val = ship.signal_intervals.get(talker, 1.0)
-                
+
                 spin = self._create_interval_cell(val)
                 spin.setProperty("row", r)
                 spin.setProperty("col", c)
                 spin.valueChanged.connect(self.on_signal_interval_changed)
                 table.setCellWidget(r, c, spin)
 
-        table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        table.setColumnWidth(0, 40)
-        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        for i in range(1, table.columnCount()):
+        # Set row height and calculate total table height
+        row_height = 60  # Each row height (2x default)
+        for r in range(table.rowCount()):
+            table.setRowHeight(r, row_height)
+
+        for i in range(table.columnCount()):
             table.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeMode.Stretch)
-        
+
+        # Calculate total table height (header + all rows + margin)
+        header_height = table.horizontalHeader().height()
+        total_height = header_height + (row_height * table.rowCount()) + 4
+        table.setFixedHeight(total_height)
+        table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
         return table
 
     def _create_interval_cell(self, value):
@@ -889,29 +916,18 @@ class SimulationPanel(QWidget):
         talkers = ["AIVDM", "RATTM", "Camera"]
         ships = [s for s in current_project.ships if s.idx != current_project.settings.own_ship_idx]
 
+        # r == 0 is ALL row, apply to all ships
         rows_model = [r] if r > 0 else range(1, len(ships) + 1)
-        cols_model = [c] if c > 0 else range(1, len(talkers) + 1)
-        if r == 0 and c == 0:
-            rows_model = range(1, len(ships) + 1)
-            cols_model = range(1, len(talkers) + 1)
 
         for row_idx in rows_model:
-            for col_idx in cols_model:
-                ship = ships[row_idx - 1]
-                talker = talkers[col_idx - 1]
-                ship.signal_intervals[talker] = value
+            ship = ships[row_idx - 1]
+            talker = talkers[c]
+            ship.signal_intervals[talker] = value
 
-        if r == 0 or c == 0:
-            rows_ui = range(table.rowCount()) if r == 0 else [r]
-            cols_ui = range(table.columnCount()) if c == 0 else [c]
-            if r == 0 and c == 0:
-                rows_ui = range(table.rowCount())
-                cols_ui = range(table.columnCount())
-
-            for row in rows_ui:
-                for col in cols_ui:
-                    if row == r and col == c: continue
-                    self._set_interval_spinbox(row, col, value)
+        # If ALL row (r == 0), update all other rows in the same column
+        if r == 0:
+            for row in range(1, table.rowCount()):
+                self._set_interval_spinbox(row, c, value)
 
     def _set_interval_spinbox(self, r, c, value):
         widget = self.interval_table_ref.cellWidget(r, c)
@@ -1045,10 +1061,10 @@ class SimulationPanel(QWidget):
     def on_control_ship_changed(self):
         idx = self.combo_control_ship.currentData()
         
-        # [동기화 로직 추가] 콤보박스에서 선박 선택 시 맵의 하이라이트도 같이 업데이트
-        # 선택된 인덱스가 없으면 하이라이트 해제(-1)
+        # [Sync logic] Update map highlight when ship is selected from combobox
+        # Clear highlight (-1) if no index is selected
         self.highlighted_ship_idx = idx if idx is not None else -1
-        # 변경 사항을 반영하기 위해 맵 다시 그리기
+        # Redraw map to reflect changes
         self.draw_static_map()
 
         if idx is None: return
@@ -1118,7 +1134,7 @@ class SimulationPanel(QWidget):
              if not ship.raw_points: continue 
              
              is_own = (ship.idx == current_project.settings.own_ship_idx)
-             is_random = (ship.idx >= 1000) # 랜덤 타겟 여부 확인
+             is_random = (ship.idx >= 1000) # Check if random target
              
              if is_own:
                  c_hex = current_project.settings.own_color
@@ -1147,7 +1163,7 @@ class SimulationPanel(QWidget):
              pen.setDashPattern([1, 4])
              path.setPen(pen)
              
-             # [수정] 랜덤 타겟이 아닐 때만 점선 경로(Planned Path) 표시
+             # [Modified] Show dotted path (Planned Path) only for non-random targets
              if self.chk_show_paths.isChecked() and not is_random:
                  self.scene.addItem(path)
              self.planned_paths[ship.idx] = path
@@ -1239,7 +1255,7 @@ class SimulationPanel(QWidget):
                  tf.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
                  tf.setZValue(3)
 
-                 # [수정] 랜덤 타겟이 아닐 때만 i, f 마커 표시
+                 # [Modified] Show i, f markers only for non-random targets
                  if self.chk_show_paths.isChecked() and not is_random:
                      self.scene.addItem(ti)
                      self.scene.addItem(tf)
@@ -1413,7 +1429,7 @@ class SimulationPanel(QWidget):
         try:
             port = int(self.port_edit.text())
         except:
-            QMessageBox.critical(self, "Error", "Invalid Port")
+            msgbox.show_critical(self, "Error", "Invalid Port")
             return
             
         self.worker_thread = QThread()
@@ -1466,12 +1482,12 @@ class SimulationPanel(QWidget):
     def action_capture(self):
         path, _ = QFileDialog.getSaveFileName(self, "Save Map Capture", "", "PNG Image (*.png);;JPEG Image (*.jpg)")
         if not path: return
-        
+
         pixmap = self.view.grab()
         if pixmap.save(path):
-            QMessageBox.information(self, "Saved", f"Map captured to {os.path.basename(path)}")
+            msgbox.show_information(self, "Saved", f"Map captured to {os.path.basename(path)}")
         else:
-            QMessageBox.warning(self, "Error", "Failed to save image.")
+            msgbox.show_warning(self, "Error", "Failed to save image.")
 
     def action_pause(self):
         if self.worker:
@@ -1773,22 +1789,22 @@ class SimulationPanel(QWidget):
     def save_log_to_file(self):
         text = self.log_list.toPlainText()
         if not text:
-            QMessageBox.information(self, "Info", "No log content to save.")
+            msgbox.show_information(self, "Info", "No log content to save.")
             return
-            
+
         path, _ = QFileDialog.getSaveFileName(self, "Save Log", "", "Text Files (*.txt)")
         if not path: return
-        
+
         try:
             with open(path, 'w', encoding='utf-8') as f:
                 f.write(text)
-            QMessageBox.information(self, "Saved", "Log saved.")
+            msgbox.show_information(self, "Saved", "Log saved.")
         except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
+            msgbox.show_critical(self, "Error", str(e))
 
     def export_csv(self):
         if not self.data_ready_flag or not self.worker or not self.worker.temp_file_handle:
-            QMessageBox.warning(self, "Info", "No data to export.")
+            msgbox.show_warning(self, "Info", "No data to export.")
             return
         
         own_idx = current_project.settings.own_ship_idx
@@ -1829,9 +1845,9 @@ class SimulationPanel(QWidget):
                     writer.writerow(row)
                     start_id += 1
             
-            QMessageBox.information(self, "Done", "Exported successfully.")
+            msgbox.show_information(self, "Done", "Exported successfully.")
         except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
+            msgbox.show_critical(self, "Error", str(e))
         finally:
             pass
 
@@ -1892,9 +1908,8 @@ class SimulationPanel(QWidget):
         dlg = TargetInfoDialog(self, idx, self.worker)
         res = dlg.exec()
         
-        if res == QDialog.DialogCode.Accepted: 
-            if QMessageBox.question(self, "Delete Target", f"Delete '{ship.name}'?", 
-                                   QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+        if res == QDialog.DialogCode.Accepted:
+            if msgbox.show_question(self, "Delete Target", f"Delete '{ship.name}'?") == msgbox.StandardButton.Yes:
                 self.delete_single_target(idx)
         elif res == 2: 
             self.highlighted_ship_idx = idx

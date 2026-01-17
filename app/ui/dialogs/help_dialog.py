@@ -6,7 +6,7 @@ class HelpDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("User Guide")
-        self.resize(800, 600)
+        self.resize(1120, 840)
         
         layout = QHBoxLayout(self)
         self.list = QListWidget()

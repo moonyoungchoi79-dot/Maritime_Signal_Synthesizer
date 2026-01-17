@@ -536,17 +536,24 @@ QFrame[frameShape="4"], QFrame[frameShape="5"] {
 /* === Label === */
 QLabel {
     color: #0f172a;
+    background-color: transparent;
+    padding: 0px;
+    margin: 0px;
+    min-height: 0px;
+    max-height: 20px;
 }
 
 QLabel[heading="true"] {
     font-size: 18px;
     font-weight: 600;
     color: #0f172a;
+    max-height: 24px;
 }
 
 QLabel[subheading="true"] {
     font-size: 14px;
     color: #64748b;
+    max-height: 20px;
 }
 
 /* === Dock Widget === */

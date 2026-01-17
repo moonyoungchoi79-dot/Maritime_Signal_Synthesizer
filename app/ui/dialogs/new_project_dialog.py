@@ -10,7 +10,7 @@ class NewProjectDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("New Project")
-        self.resize(400, 250)
+        self.resize(560, 350)
         l = QFormLayout(self)
         
         self.title_edit = QLineEdit("MyProject")

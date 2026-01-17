@@ -4,9 +4,10 @@ import copy
 import re
 from app.core.utils import sanitize_filename
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, 
-    QComboBox, QListWidget, QListWidgetItem, QGroupBox, QFormLayout, 
-    QFileDialog, QMessageBox, QCheckBox, QAbstractItemView, QDoubleSpinBox, QSpinBox, QMenu
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit,
+    QComboBox, QListWidget, QListWidgetItem, QGroupBox, QFormLayout,
+    QFileDialog, QCheckBox, QAbstractItemView, QDoubleSpinBox, QSpinBox, QMenu,
+    QScrollArea, QSizePolicy, QDialog, QDialogButtonBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor
@@ -15,6 +16,7 @@ from app.core.models.project import current_project, EventTrigger
 from app.core.models.event import EventCondition
 from app.core.models.scenario import Scenario
 from app.ui.widgets.time_input_widget import TimeInputWidget
+from app.ui.widgets import message_box as msgbox
 import app.core.state as app_state
 
 class ScenarioPanel(QWidget):
@@ -29,13 +31,24 @@ class ScenarioPanel(QWidget):
         self.is_dirty = False
         self.loading_event = False
         self.last_selected_row = -1
-            
+        self.auto_save_prereqs = False  # Auto save when "Don't ask again" is selected
+
         self.init_ui()
         self.refresh_ui()
 
     def init_ui(self):
-        main_layout = QHBoxLayout(self)
-        
+        outer_layout = QHBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Scroll Area for entire panel
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        scroll_content = QWidget()
+        main_layout = QHBoxLayout(scroll_content)
+
         # --- Left Panel: Scenario List ---
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
@@ -108,14 +121,16 @@ class ScenarioPanel(QWidget):
         # 3. Event Composition
         event_group = QGroupBox("Event Composition")
         event_layout = QHBoxLayout(event_group)
-        
+
         # Available Events (from Project)
         v1 = QVBoxLayout()
-        v1.addWidget(QLabel("Available Events (Project)"))
+        lbl_avail = QLabel("Available Events (Project)")
+        lbl_avail.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        v1.addWidget(lbl_avail)
         self.list_avail = QListWidget()
         v1.addWidget(self.list_avail)
         event_layout.addLayout(v1)
-        
+
         # Buttons
         btn_layout = QVBoxLayout()
         self.btn_add = QPushButton("Add ->")
@@ -127,73 +142,75 @@ class ScenarioPanel(QWidget):
         btn_layout.addWidget(self.btn_remove)
         btn_layout.addStretch()
         event_layout.addLayout(btn_layout)
-        
+
         # Scenario Events
         v2 = QVBoxLayout()
-        v2.addWidget(QLabel("Scenario Events (Included)"))
+        lbl_scen = QLabel("Scenario Events (Included)")
+        lbl_scen.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        v2.addWidget(lbl_scen)
         self.list_scen_events = QListWidget()
         self.list_scen_events.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self.list_scen_events.model().rowsMoved.connect(self.on_scen_list_reordered)
         self.list_scen_events.itemChanged.connect(self.on_scen_event_item_changed)
         v2.addWidget(self.list_scen_events)
-        
+
         self.btn_dup_scen = QPushButton("Duplicate Selected")
         self.btn_dup_scen.clicked.connect(self.duplicate_scenario_event)
         v2.addWidget(self.btn_dup_scen)
-        
+
         event_layout.addLayout(v2)
-        
+
         self.right_layout.addWidget(event_group)
         
-        # 5. Event Editor (기본 정보는 읽기 전용, 조건부 이벤트만 편집)
+        # 5. Event Editor (basic info is read-only, only conditional events editable)
         self.editor_group = QGroupBox("Selected Event Details (Edit event details in Event tab)")
         self.editor_group.setEnabled(False)
         form = QFormLayout(self.editor_group)
-        
+
         self.edit_evt_name = QLineEdit()
-        self.edit_evt_name.setReadOnly(True)  # 읽기 전용 (Event 탭에서 수정)
+        self.edit_evt_name.setReadOnly(True)  # Read-only (edit in Event tab)
         self.edit_evt_name.setStyleSheet("background-color: #f0f0f0;")
         self.chk_evt_enabled = QCheckBox("Enabled")
-        self.chk_evt_enabled.setEnabled(False)  # 읽기 전용 (Event 탭에서 수정)
+        self.chk_evt_enabled.setEnabled(False)  # Read-only (edit in Event tab)
 
         self.combo_trigger = QComboBox()
         self.combo_trigger.addItems(["TIME", "AREA_ENTER", "AREA_LEAVE", "CPA_UNDER", "CPA_OVER", "DIST_UNDER", "DIST_OVER"])
         self.combo_trigger.currentIndexChanged.connect(self.update_editor_ui_state)
-        self.combo_trigger.setEnabled(False)  # 읽기 전용
+        self.combo_trigger.setEnabled(False)  # Read-only
 
         self.combo_time_ref = QComboBox()
         self.combo_time_ref.addItems(["Elapsed Time (Since Start)", "Remaining Time (Until End)"])
         self.combo_time_ref.currentIndexChanged.connect(self.on_time_ref_changed)
-        self.combo_time_ref.setEnabled(False)  # 읽기 전용
+        self.combo_time_ref.setEnabled(False)  # Read-only
 
         self.time_input = TimeInputWidget()
-        self.time_input.setEnabled(False)  # 읽기 전용
+        self.time_input.setEnabled(False)  # Read-only
 
         self.spin_cpa = QDoubleSpinBox()
         self.spin_cpa.setRange(0, 10000000)
         self.spin_cpa.setSuffix(" NM")
-        self.spin_cpa.setReadOnly(True)  # 읽기 전용
+        self.spin_cpa.setReadOnly(True)  # Read-only
 
         self.combo_ref = QComboBox()
-        self.combo_ref.setEnabled(False)  # 읽기 전용
+        self.combo_ref.setEnabled(False)  # Read-only
         self.combo_area = QComboBox()
-        self.combo_area.setEnabled(False)  # 읽기 전용
+        self.combo_area.setEnabled(False)  # Read-only
 
         self.combo_action = QComboBox()
         self.combo_action.addItems(["STOP", "CHANGE_SPEED", "CHANGE_HEADING", "MANEUVER"])
         self.combo_action.currentIndexChanged.connect(self.update_editor_ui_state)
-        self.combo_action.setEnabled(False)  # 읽기 전용
+        self.combo_action.setEnabled(False)  # Read-only
 
         self.combo_action_option = QComboBox()
         self.combo_action_option.addItems(["ReturnToOriginalPath_ShortestDistance", "ChangeDestination_ToOriginalFinal"])
-        self.combo_action_option.setEnabled(False)  # 읽기 전용
+        self.combo_action_option.setEnabled(False)  # Read-only
 
         self.combo_target = QComboBox()
-        self.combo_target.setEnabled(False)  # 읽기 전용
+        self.combo_target.setEnabled(False)  # Read-only
 
         self.spin_action_val = QDoubleSpinBox()
         self.spin_action_val.setRange(0, 1000)
-        self.spin_action_val.setReadOnly(True)  # 읽기 전용
+        self.spin_action_val.setReadOnly(True)  # Read-only
 
         self.lbl_act_val = QLabel("Value:")
         
@@ -208,7 +225,10 @@ class ScenarioPanel(QWidget):
         self.right_layout.addWidget(self.chk_enable_scen)
         
         main_layout.addWidget(right_widget, 3)
-        
+
+        scroll.setWidget(scroll_content)
+        outer_layout.addWidget(scroll)
+
         self.current_filepath = None
 
     def _build_editor_form(self, form):
@@ -225,56 +245,55 @@ class ScenarioPanel(QWidget):
         form.addRow("Target Ship:", self.combo_target)
         form.addRow(self.lbl_act_val, self.spin_action_val)
 
-        # 조건부 이벤트 UI
+        # Conditional Events UI
         prereq_widget = QWidget()
         prereq_layout = QVBoxLayout(prereq_widget)
         prereq_layout.setContentsMargins(0, 0, 0, 0)
 
-        # 논리 연산자 선택
+        # Logic operator selection
         logic_layout = QHBoxLayout()
         logic_label = QLabel("Logic:")
         self.combo_prereq_logic = QComboBox()
-        self.combo_prereq_logic.addItems(["AND (모든 조건 충족)", "OR (하나라도 충족)"])
+        self.combo_prereq_logic.addItems(["AND (All conditions)", "OR (Any condition)"])
         self.combo_prereq_logic.currentIndexChanged.connect(self.mark_dirty)
         logic_layout.addWidget(logic_label)
         logic_layout.addWidget(self.combo_prereq_logic)
         logic_layout.addStretch()
         prereq_layout.addLayout(logic_layout)
 
-        # 조건 추가 행
+        # Add condition row
         add_layout = QHBoxLayout()
         self.combo_prereq_event = QComboBox()
         self.combo_prereq_event.setMinimumWidth(150)
         add_layout.addWidget(self.combo_prereq_event)
 
         self.combo_prereq_mode = QComboBox()
-        self.combo_prereq_mode.addItems(["TRIGGERED (발동됨)", "NOT_TRIGGERED (발동 안됨)"])
+        self.combo_prereq_mode.addItems(["TRIGGERED", "NOT_TRIGGERED"])
         add_layout.addWidget(self.combo_prereq_mode)
 
         btn_add_prereq = QPushButton("+")
         btn_add_prereq.setFixedWidth(30)
+        btn_add_prereq.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         btn_add_prereq.clicked.connect(self._add_prerequisite)
         add_layout.addWidget(btn_add_prereq)
         prereq_layout.addLayout(add_layout)
 
-        # 조건 목록
+        # Condition list
         self.list_prereqs = QListWidget()
-        self.list_prereqs.setMaximumHeight(60)
+        self.list_prereqs.setFixedHeight(75)  # Fixed height for about 3 rows
         prereq_layout.addWidget(self.list_prereqs)
 
-        # 삭제 버튼
+        # Remove button
         btn_remove_prereq = QPushButton("Remove Selected")
+        btn_remove_prereq.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         btn_remove_prereq.clicked.connect(self._remove_prerequisite)
         prereq_layout.addWidget(btn_remove_prereq)
 
         form.addRow("Prerequisites:", prereq_widget)
 
-        btn_save_evt = QPushButton("Apply Prerequisite Changes")
-        btn_save_evt.clicked.connect(self.save_event_changes)
-        form.addRow(btn_save_evt)
-        
-        # 기본 이벤트 정보는 읽기 전용 - dirty 체크 불필요
-        # 조건부 이벤트 변경만 dirty 체크 (combo_prereq_logic은 위에서 연결됨)
+        # Basic event info is read-only - no dirty check needed
+        # Only conditional event changes need dirty check (combo_prereq_logic connected above)
+        # Saving is done via popup when selecting another event
 
     def refresh_ui(self):
         # Refresh List
@@ -349,6 +368,7 @@ class ScenarioPanel(QWidget):
             item.setCheckState(Qt.CheckState.Checked if e.enabled else Qt.CheckState.Unchecked)
             self.list_scen_events.addItem(item)
         self.list_scen_events.blockSignals(False)
+
         self.editor_group.setEnabled(False)
         self.is_dirty = False
         self.last_selected_row = -1
@@ -405,12 +425,16 @@ class ScenarioPanel(QWidget):
     def on_enable_toggled(self, checked):
         if not app_state.current_scenario: return
         app_state.current_scenario.enabled = checked
-        
-        # Update list item check state
+
+        # Update list item check state - find matching scenario in list
         self.list_scenarios.blockSignals(True)
-        row = self.list_scenarios.currentRow()
-        if row >= 0:
-            self.list_scenarios.item(row).setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+        for i in range(self.list_scenarios.count()):
+            item = self.list_scenarios.item(i)
+            idx = item.data(Qt.ItemDataRole.UserRole)
+            if idx is not None and idx < len(app_state.loaded_scenarios):
+                if app_state.loaded_scenarios[idx] == app_state.current_scenario:
+                    item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+                    break
         self.list_scenarios.blockSignals(False)
 
     def add_event_to_scenario(self):
@@ -422,7 +446,7 @@ class ScenarioPanel(QWidget):
         
         # Check for duplicates in current scenario
         if any(e.id == eid for e in app_state.current_scenario.events):
-            QMessageBox.warning(self, "Duplicate", "This event is already added to the scenario.")
+            msgbox.show_warning(self, "Duplicate", "This event is already added to the scenario.")
             return
         
         # Find original event
@@ -450,14 +474,14 @@ class ScenarioPanel(QWidget):
     def duplicate_scenario_event(self):
         if not app_state.current_scenario: return
         if self.is_dirty:
-            ret = QMessageBox.question(
-                self, "Unsaved Changes", 
+            ret = msgbox.show_question(
+                self, "Unsaved Changes",
                 "You have unsaved changes. Save them before duplicating?",
-                QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel
+                msgbox.StandardButton.Save | msgbox.StandardButton.Discard | msgbox.StandardButton.Cancel
             )
-            if ret == QMessageBox.StandardButton.Cancel:
+            if ret == msgbox.StandardButton.Cancel:
                 return
-            elif ret == QMessageBox.StandardButton.Save:
+            elif ret == msgbox.StandardButton.Save:
                 self.save_event_changes(target_row=self.last_selected_row)
 
         row = self.list_scen_events.currentRow()
@@ -554,14 +578,13 @@ class ScenarioPanel(QWidget):
                 self.current_filepath = path
                 self.refresh_ui()
             except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to load scenario: {e}")
+                msgbox.show_critical(self, "Error", f"Failed to load scenario: {e}")
 
     def remove_scenario(self):
         items = self.list_scenarios.selectedItems()
         if not items: return
-        
-        if QMessageBox.question(self, "Remove Scenarios", f"Remove {len(items)} scenarios?", 
-                                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+
+        if msgbox.show_question(self, "Remove Scenarios", f"Remove {len(items)} scenarios?") != msgbox.StandardButton.Yes:
             return
             
         # Sort rows descending to remove safely
@@ -605,9 +628,9 @@ class ScenarioPanel(QWidget):
         else:
             try:
                 app_state.current_scenario.save_to_file(self.current_filepath)
-                QMessageBox.information(self, "Saved", "Scenario saved.")
+                msgbox.show_information(self, "Saved", "Scenario saved.")
             except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to save: {e}")
+                msgbox.show_critical(self, "Error", f"Failed to save: {e}")
 
     def save_scenario_as(self):
         if not app_state.current_scenario: return
@@ -622,29 +645,65 @@ class ScenarioPanel(QWidget):
 
     def on_scen_event_selected(self):
         if not app_state.current_scenario: return
+
         # Check for unsaved changes
         if self.is_dirty:
-            ret = QMessageBox.question(
-                self, "Unsaved Changes", 
-                "You have unsaved changes in the current event. Do you want to save them?",
-                QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel
-            )
-            
-            if ret == QMessageBox.StandardButton.Cancel:
-                self.list_scen_events.blockSignals(True)
-                if self.last_selected_row != -1 and self.last_selected_row < self.list_scen_events.count():
-                    self.list_scen_events.setCurrentRow(self.last_selected_row)
-                else:
-                    self.list_scen_events.clearSelection()
-                self.list_scen_events.blockSignals(False)
-                return
-            elif ret == QMessageBox.StandardButton.Save:
-                # Save to the PREVIOUS row
+            if self.auto_save_prereqs:
+                # "Don't ask again" selected - auto save
                 self.save_event_changes(target_row=self.last_selected_row)
             else:
-                # Discard
-                self.is_dirty = False
-                self.editor_group.setTitle("Selected Event Details")
+                # Show custom dialog
+                dialog = QDialog(self)
+                dialog.setWindowTitle("Unsaved Changes")
+                layout = QVBoxLayout(dialog)
+
+                layout.addWidget(QLabel("You have unsaved prerequisite changes.\nDo you want to save them?"))
+
+                chk_dont_ask = QCheckBox("Don't ask again (always save)")
+                layout.addWidget(chk_dont_ask)
+
+                btn_box = QDialogButtonBox()
+                btn_save = btn_box.addButton("Save", QDialogButtonBox.ButtonRole.AcceptRole)
+                btn_discard = btn_box.addButton("Discard", QDialogButtonBox.ButtonRole.DestructiveRole)
+                btn_cancel = btn_box.addButton("Cancel", QDialogButtonBox.ButtonRole.RejectRole)
+                layout.addWidget(btn_box)
+
+                result = {"action": None}
+
+                def on_save():
+                    result["action"] = "save"
+                    dialog.accept()
+
+                def on_discard():
+                    result["action"] = "discard"
+                    dialog.accept()
+
+                def on_cancel():
+                    result["action"] = "cancel"
+                    dialog.reject()
+
+                btn_save.clicked.connect(on_save)
+                btn_discard.clicked.connect(on_discard)
+                btn_cancel.clicked.connect(on_cancel)
+
+                dialog.exec()
+
+                if result["action"] == "cancel" or result["action"] is None:
+                    self.list_scen_events.blockSignals(True)
+                    if self.last_selected_row != -1 and self.last_selected_row < self.list_scen_events.count():
+                        self.list_scen_events.setCurrentRow(self.last_selected_row)
+                    else:
+                        self.list_scen_events.clearSelection()
+                    self.list_scen_events.blockSignals(False)
+                    return
+                elif result["action"] == "save":
+                    if chk_dont_ask.isChecked():
+                        self.auto_save_prereqs = True
+                    self.save_event_changes(target_row=self.last_selected_row)
+                else:
+                    # Discard
+                    self.is_dirty = False
+                    self.editor_group.setTitle("Selected Event Details")
 
         items = self.list_scen_events.selectedItems()
         if not items:
@@ -660,7 +719,7 @@ class ScenarioPanel(QWidget):
             
         evt = app_state.current_scenario.events[row]
 
-        # Project Event에서 최신 데이터 동기화 (양방향 실시간 동기화)
+        # Sync latest data from Project Event (bidirectional real-time sync)
         proj_evt = next((e for e in current_project.events if e.id == evt.id), None)
         if proj_evt:
             evt.name = proj_evt.name
@@ -677,6 +736,7 @@ class ScenarioPanel(QWidget):
         self.loading_event = True
         self.last_selected_row = row
         self.editor_group.setEnabled(True)
+        self.editor_group.setTitle(f"Selected Event Details: {evt.name}")
 
         self.edit_evt_name.setText(evt.name)
         self.chk_evt_enabled.setChecked(evt.enabled)
@@ -714,7 +774,7 @@ class ScenarioPanel(QWidget):
         
         self.spin_action_val.setValue(evt.action_value)
 
-        # 조건부 이벤트 로드
+        # Load conditional events
         self._populate_prereq_event_combo(evt.id)
         logic = getattr(evt, 'prerequisite_logic', 'AND')
         self.combo_prereq_logic.setCurrentIndex(0 if logic == "AND" else 1)
@@ -729,14 +789,14 @@ class ScenarioPanel(QWidget):
                 event_id = cond.event_id
                 mode = cond.mode
 
-            # 이벤트 이름 찾기
+            # Find event name
             event_name = event_id
             for e in app_state.current_scenario.events:
                 if e.id == event_id:
                     event_name = e.name
                     break
 
-            mode_text = "발동됨" if mode == "TRIGGERED" else "발동 안됨"
+            mode_text = "TRIGGERED" if mode == "TRIGGERED" else "NOT_TRIGGERED"
             item = QListWidgetItem(f"{event_name} → {mode_text}")
             item.setData(Qt.ItemDataRole.UserRole, event_id)
             item.setData(Qt.ItemDataRole.UserRole + 1, mode)
@@ -801,18 +861,17 @@ class ScenarioPanel(QWidget):
         label = self.editor_group.layout().labelForField(widget)
         if label: label.setVisible(visible)
 
-    def save_event_changes(self, target_row=None):
+    def save_event_changes(self, target_row):
+        """Save event prerequisites (called when selecting another event)"""
         if not app_state.current_scenario: return
-        if target_row is None:
-            items = self.list_scen_events.selectedItems()
-            if not items: return
-            row = self.list_scen_events.row(items[0])
-        else:
-            row = target_row
+        if target_row is None or target_row < 0:
+            return
+        if target_row >= len(app_state.current_scenario.events):
+            return
 
-        evt = app_state.current_scenario.events[row]
+        evt = app_state.current_scenario.events[target_row]
 
-        # 조건부 이벤트만 저장 (조건부 설정은 시나리오 탭에서만)
+        # Save only conditional events (conditional settings only in scenario tab)
         evt.prerequisite_logic = "AND" if self.combo_prereq_logic.currentIndex() == 0 else "OR"
         evt.prerequisite_events = []
         for i in range(self.list_prereqs.count()):
@@ -821,36 +880,40 @@ class ScenarioPanel(QWidget):
             mode = item.data(Qt.ItemDataRole.UserRole + 1)
             evt.prerequisite_events.append(EventCondition(event_id=event_id, mode=mode))
 
-        # ID 유지 - triggered_events에서 제거하여 재평가 가능하게 함
+        # Keep ID - remove from triggered_events for re-evaluation
         main_win = self.window()
         if hasattr(main_win, 'worker') and main_win.worker:
             main_win.worker.reset_triggered_event(evt.id)
 
-        # Project Events와 양방향 동기화 (조건부 이벤트 정보만)
+        # Bidirectional sync with Project Events (conditional event info only)
         proj_evt = next((e for e in current_project.events if e.id == evt.id), None)
         if proj_evt:
             proj_evt.prerequisite_logic = evt.prerequisite_logic
             proj_evt.prerequisite_events = evt.prerequisite_events
 
         self.list_scen_events.blockSignals(True)
-        item = self.list_scen_events.item(row)
+        item = self.list_scen_events.item(target_row)
         if item:
             item.setText(evt.name)
             item.setCheckState(Qt.CheckState.Checked if evt.enabled else Qt.CheckState.Unchecked)
         self.list_scen_events.blockSignals(False)
 
-        # Event Panel UI 갱신
+        # Refresh Event Panel UI
         if hasattr(main_win, 'event_panel'):
             main_win.event_panel.refresh_table()
 
         self.is_dirty = False
-        self.editor_group.setTitle("Selected Event Details")
         self.data_changed.emit()
 
     def mark_dirty(self):
         if not self.loading_event:
             self.is_dirty = True
-            self.editor_group.setTitle("Selected Event Details *")
+            # Get currently selected event name
+            evt_name = ""
+            if app_state.current_scenario and self.last_selected_row >= 0:
+                if self.last_selected_row < len(app_state.current_scenario.events):
+                    evt_name = app_state.current_scenario.events[self.last_selected_row].name
+            self.editor_group.setTitle(f"Selected Event Details: {evt_name} *")
 
     def get_current_ship_duration(self):
         sid = self.combo_target.currentData()
@@ -871,29 +934,29 @@ class ScenarioPanel(QWidget):
         self.time_input.set_seconds(new_val)
 
     def _populate_prereq_event_combo(self, current_evt_id=None):
-        """조건부 이벤트 콤보박스 채우기"""
+        """Populate conditional event combo box"""
         self.combo_prereq_event.clear()
         if not app_state.current_scenario:
             return
         for evt in app_state.current_scenario.events:
-            if evt.id != current_evt_id:  # 자기 자신 제외
+            if evt.id != current_evt_id:  # Exclude self
                 self.combo_prereq_event.addItem(evt.name, evt.id)
 
     def _add_prerequisite(self):
-        """선행 조건 추가"""
+        """Add prerequisite condition"""
         if self.combo_prereq_event.count() == 0:
             return
 
         event_id = self.combo_prereq_event.currentData()
         event_name = self.combo_prereq_event.currentText()
         mode = "TRIGGERED" if self.combo_prereq_mode.currentIndex() == 0 else "NOT_TRIGGERED"
-        mode_text = "발동됨" if mode == "TRIGGERED" else "발동 안됨"
+        mode_text = "TRIGGERED" if mode == "TRIGGERED" else "NOT_TRIGGERED"
 
-        # 중복 체크
+        # Duplicate check
         for i in range(self.list_prereqs.count()):
             item = self.list_prereqs.item(i)
             if item.data(Qt.ItemDataRole.UserRole) == event_id:
-                QMessageBox.warning(self, "Warning", "이미 추가된 이벤트입니다.")
+                msgbox.show_warning(self, "Warning", "This event is already added.")
                 return
 
         item = QListWidgetItem(f"{event_name} → {mode_text}")
@@ -903,7 +966,7 @@ class ScenarioPanel(QWidget):
         self.mark_dirty()
 
     def _remove_prerequisite(self):
-        """선택된 선행 조건 제거"""
+        """Remove selected prerequisite condition"""
         current_row = self.list_prereqs.currentRow()
         if current_row >= 0:
             self.list_prereqs.takeItem(current_row)
