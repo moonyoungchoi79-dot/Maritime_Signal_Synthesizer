@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(tree:*)",
+      "Bash(dir \"c:\\\\Users\\\\mnyng\\\\Documents\\\\GitHub\\\\Maritime_Signal_Synthesizer\\\\app\\\\ui\\\\widgets\")"
     ]
   }
 }

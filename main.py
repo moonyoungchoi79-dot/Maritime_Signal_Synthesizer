@@ -14,3 +14,8 @@ if __name__ == "__main__":
     w = MainWindow()
     w.show()
     sys.exit(app.exec())
+
+
+# 
+# Project, Event, Scenario 파일 구조 서식 문서화(만약 필요시 공유/호환 가능하도록 간략하면서도 명확하게 서식 수정)
+# 

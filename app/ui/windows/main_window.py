@@ -50,6 +50,98 @@ from app.ui.panels.scenario_panel import ScenarioPanel
 from app.ui.widgets import message_box as msg
 import app.core.state as app_state
 
+class AddShipDialog(QDialog):
+    """Dialog for adding a new ship with class and dimensions."""
+
+    SHIP_CLASSES = ["CONTAINER", "TANKER", "CARGO", "PASSENGER", "FISHING", "BUOY", "OTHER"]
+
+    def __init__(self, parent=None, default_name="Ship-0"):
+        super().__init__(parent)
+        from app.core.models.ship import SHIP_CLASS_DIMENSIONS
+
+        self.ship_dimensions = SHIP_CLASS_DIMENSIONS
+        self.setWindowTitle("Add Ship")
+        self.setMinimumWidth(350)
+
+        layout = QVBoxLayout(self)
+
+        # Ship basic info
+        basic_group = QGroupBox("Basic Information")
+        basic_layout = QFormLayout(basic_group)
+
+        self.name_edit = QLineEdit(default_name)
+        basic_layout.addRow("Ship Name:", self.name_edit)
+
+        self.class_combo = QComboBox()
+        self.class_combo.addItems(self.SHIP_CLASSES)
+        self.class_combo.setCurrentText("CONTAINER")
+        self.class_combo.currentTextChanged.connect(self._on_class_changed)
+        basic_layout.addRow("Ship Class:", self.class_combo)
+
+        layout.addWidget(basic_group)
+
+        # Ship dimensions
+        dim_group = QGroupBox("Dimensions (meters)")
+        dim_layout = QFormLayout(dim_group)
+
+        self.length_spin = QDoubleSpinBox()
+        self.length_spin.setRange(1, 500)
+        self.length_spin.setValue(300.0)
+        self.length_spin.setDecimals(1)
+        self.length_spin.setSuffix(" m")
+        dim_layout.addRow("Length:", self.length_spin)
+
+        self.beam_spin = QDoubleSpinBox()
+        self.beam_spin.setRange(1, 100)
+        self.beam_spin.setValue(40.0)
+        self.beam_spin.setDecimals(1)
+        self.beam_spin.setSuffix(" m")
+        dim_layout.addRow("Beam (Width):", self.beam_spin)
+
+        self.draft_spin = QDoubleSpinBox()
+        self.draft_spin.setRange(1, 50)
+        self.draft_spin.setValue(15.0)
+        self.draft_spin.setDecimals(1)
+        self.draft_spin.setSuffix(" m")
+        dim_layout.addRow("Draft:", self.draft_spin)
+
+        self.air_draft_spin = QDoubleSpinBox()
+        self.air_draft_spin.setRange(1, 150)
+        self.air_draft_spin.setValue(60.0)
+        self.air_draft_spin.setDecimals(1)
+        self.air_draft_spin.setSuffix(" m")
+        dim_layout.addRow("Air Draft:", self.air_draft_spin)
+
+        layout.addWidget(dim_group)
+
+        # Buttons
+        btn_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btn_box.accepted.connect(self.accept)
+        btn_box.rejected.connect(self.reject)
+        layout.addWidget(btn_box)
+
+    def _on_class_changed(self, ship_class: str):
+        """Update dimension spinboxes when ship class changes."""
+        dims = self.ship_dimensions.get(ship_class, self.ship_dimensions["OTHER"])
+        self.length_spin.setValue(dims[0])
+        self.beam_spin.setValue(dims[1])
+        self.draft_spin.setValue(dims[2])
+        self.air_draft_spin.setValue(dims[3])
+
+    def get_data(self):
+        """Return the ship data entered by user."""
+        return {
+            "name": self.name_edit.text().strip() or "Unnamed",
+            "ship_class": self.class_combo.currentText(),
+            "length_m": self.length_spin.value(),
+            "beam_m": self.beam_spin.value(),
+            "draft_m": self.draft_spin.value(),
+            "air_draft_m": self.air_draft_spin.value()
+        }
+
+
 class ColoredTabBar(QTabBar):
     def tabSizeHint(self, index):
         size = super().tabSizeHint(index)
@@ -129,16 +221,6 @@ class MainWindow(QMainWindow):
         
         # Initialize tab state
         self.update_sim_tab_state("STOP")
-
-    def format_duration(self, seconds):
-        d = int(seconds // 86400)
-        h = int((seconds % 86400) // 3600)
-        m = int((seconds % 3600) // 60)
-        s = seconds % 60
-        if d > 0: return f"{d}d {h}h {m}m {s:.1f}s"
-        if h > 0: return f"{h}h {m}m {s:.1f}s"
-        if m > 0: return f"{m}m {s:.1f}s"
-        return f"{s:.1f}s"
 
     def apply_theme(self):
         mode = current_project.settings.theme_mode
@@ -408,11 +490,7 @@ class MainWindow(QMainWindow):
         self.obj_combo = QComboBox()
         self.obj_combo.currentIndexChanged.connect(self.on_obj_selected)
         right_v.addWidget(self.obj_combo)
-        
-        self.lbl_dur = QLabel("Duration: -")
-        self.lbl_dur.setObjectName("boldLbl")
-        right_v.addWidget(self.lbl_dur)
-        
+
         self.data_table = QTableWidget()
         self.data_table.itemChanged.connect(self.on_table_changed)
         h = self.data_table.horizontalHeader()
@@ -502,9 +580,8 @@ class MainWindow(QMainWindow):
 
     def on_obj_selected(self):
         idx = self.obj_combo.currentIndex()
-        if idx < 0: 
+        if idx < 0:
             self.data_table.setRowCount(0)
-            self.lbl_dur.setText("Duration: -")
             return
             
         txt = self.obj_combo.currentText()
@@ -514,18 +591,15 @@ class MainWindow(QMainWindow):
             self.show_ship_table(sid)
         elif "[Area]" in txt:
             sid = self.obj_combo.currentData()
-            # self.btn_spd.setEnabled(False) 
+            # self.btn_spd.setEnabled(False)
             self.show_struct_table(sid)
-            self.lbl_dur.setText("Duration: -")
-            
+
         self.redraw_map()
 
     def show_ship_table(self, idx):
         ship = current_project.get_ship_by_idx(idx)
         if not ship: return
-        dur_str = "-" # Duration is dynamic now
-        self.lbl_dur.setText(f"Duration: {dur_str}")
-        
+
         self.data_table.blockSignals(True)
         self.data_table.setColumnCount(6)
         self.data_table.setHorizontalHeaderLabels(["chk", "idx", "Lat", "Lon", "Speed(kn)", "MMSI"])
@@ -936,9 +1010,6 @@ class MainWindow(QMainWindow):
         if "[Ship]" in txt:
             sid = self.obj_combo.currentData()
             s = current_project.get_ship_by_idx(sid)
-            if s:
-                dur_str = "-" # Dynamic duration
-                self.lbl_dur.setText(f"Duration: {dur_str}")
 
     def delete_points(self, s_idx, p_idx):
         if msg.show_question(self, "Delete", "Delete this point and all subsequent points?") == msg.StandardButton.No:
@@ -1128,7 +1199,15 @@ class MainWindow(QMainWindow):
                 
                 ship.raw_points = pts
                 ship.raw_speeds = spds
-                
+
+                # Load ship class and dimensions (with defaults for backward compatibility)
+                ship.ship_class = s_data.get("ship_class", "CONTAINER")
+                ship.length_m = s_data.get("length_m", 300.0)
+                ship.beam_m = s_data.get("beam_m", 40.0)
+                ship.draft_m = s_data.get("draft_m", 15.0)
+                ship.air_draft_m = s_data.get("air_draft_m", 60.0)
+                ship.height_m = s_data.get("height_m", ship.air_draft_m * 0.5)
+
                 ship.total_duration_sec = 0.0
                 ship.packed_data = None 
                 
@@ -1271,7 +1350,14 @@ class MainWindow(QMainWindow):
                 "ship_name": s.name,
                 "mmsi": s.mmsi,
                 "note": s.note,
-                "control_points": control_points
+                "control_points": control_points,
+                # Ship class and dimensions for camera bbox calculation
+                "ship_class": s.ship_class,
+                "length_m": s.length_m,
+                "beam_m": s.beam_m,
+                "draft_m": s.draft_m,
+                "air_draft_m": s.air_draft_m,
+                "height_m": s.height_m
             })
             
             # Save individual ship file
@@ -1390,20 +1476,30 @@ class MainWindow(QMainWindow):
         idx = 0
         existing = [s.idx for s in current_project.ships]
         while idx in existing: idx += 1
-        
-        name, ok = QInputDialog.getText(self, "Add Ship", "Ship Name:", text=f"Ship-{idx}")
-        if not ok: return
-        if not name.strip(): name = f"Ship-{idx}"
-        
-        s = ShipData(idx, name)
-        
+
+        dlg = AddShipDialog(self, default_name=f"Ship-{idx}")
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        data = dlg.get_data()
+        s = ShipData(idx, data["name"])
+
+        # Set ship class and dimensions
+        s.ship_class = data["ship_class"]
+        s.length_m = data["length_m"]
+        s.beam_m = data["beam_m"]
+        s.draft_m = data["draft_m"]
+        s.air_draft_m = data["air_draft_m"]
+        s.height_m = data["air_draft_m"] * 0.5  # Visible height = half of air draft
+
+        # Generate unique MMSI
         existing_mmsis = {ship.mmsi for ship in current_project.ships}
         while True:
             candidate = random.randint(100000000, 999999999)
             if candidate not in existing_mmsis:
                 s.mmsi = candidate
                 break
-        
+
         current_project.ships.append(s)
         self.update_obj_combo()
         self.check_sim_ready()

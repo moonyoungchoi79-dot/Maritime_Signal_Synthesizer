@@ -116,13 +116,13 @@ def coords_to_pixel(lat, lon, mi: "MapInfo"):
 
 def get_optimal_grid_step(scale):
     if scale <= 0: return 90
-    target_pixel_spacing = 100 
-    deg_step_candidates = [0.1, 0.5, 1, 2, 5, 10, 20, 30, 45, 90]
-    
+    target_pixel_spacing = 100
+    deg_step_candidates = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 30, 45, 90]
+
     for cand in deg_step_candidates:
         if cand * scale >= target_pixel_spacing:
             return cand
-            
+
     return 90
 
 WGS84_A = 6378137.0  # Semi-major axis

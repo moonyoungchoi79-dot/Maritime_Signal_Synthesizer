@@ -33,87 +33,284 @@ from app.workers.simulation_worker import SimulationWorker
 from app.ui.map.sim_map_view import SimMapView
 from app.ui.dialogs.rtg_dialog import RTGDialog
 from app.ui.widgets.time_input_widget import TimeInputWidget
+from app.ui.widgets.panorama_view import PanoramaView
 from app.ui.widgets import message_box as msgbox
 import app.core.state as app_state
 
 class TargetInfoDialog(QDialog):
+    # Panorama constants (matching simulation_worker.py)
+    PANO_W_PX = 1920
+    PANO_H_PX = 320
+    K_H = 2200
+    H_MIN, H_MAX = 6, 220
+    W_MIN, W_MAX = 6, 300
+    CY_RATIO = 0.60
+
     def __init__(self, parent, ship_idx, worker):
         super().__init__(parent)
         self.ship_idx = ship_idx
         self.worker = worker
         self.setWindowTitle("Target Detail")
-        self.resize(300, 400)
-        
+        self.resize(650, 750)  # Increased size for more info
+
         layout = QVBoxLayout(self)
-        self.lbl_info = QLabel()
-        self.lbl_info.setTextFormat(Qt.TextFormat.RichText)
-        layout.addWidget(self.lbl_info)
-        
+
+        # Use scroll area for all content
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_content = QWidget()
+        scroll_layout = QVBoxLayout(scroll_content)
+
+        # Basic Info Group
+        basic_group = QGroupBox("Basic Information")
+        basic_layout = QVBoxLayout(basic_group)
+        self.lbl_basic_info = QLabel()
+        self.lbl_basic_info.setTextFormat(Qt.TextFormat.RichText)
+        basic_layout.addWidget(self.lbl_basic_info)
+        scroll_layout.addWidget(basic_group)
+
+        # Navigation Info Group
+        nav_group = QGroupBox("Navigation Status")
+        nav_layout = QVBoxLayout(nav_group)
+        self.lbl_nav_info = QLabel()
+        self.lbl_nav_info.setTextFormat(Qt.TextFormat.RichText)
+        nav_layout.addWidget(self.lbl_nav_info)
+        scroll_layout.addWidget(nav_group)
+
+        # Relative Info Group (relative to OwnShip)
+        rel_group = QGroupBox("Relative to OwnShip")
+        rel_layout = QVBoxLayout(rel_group)
+        self.lbl_rel_info = QLabel()
+        self.lbl_rel_info.setTextFormat(Qt.TextFormat.RichText)
+        rel_layout.addWidget(self.lbl_rel_info)
+        scroll_layout.addWidget(rel_group)
+
+        # Ship Dimensions Group
+        dim_group = QGroupBox("Ship Dimensions")
+        dim_layout = QVBoxLayout(dim_group)
+        self.lbl_dim_info = QLabel()
+        self.lbl_dim_info.setTextFormat(Qt.TextFormat.RichText)
+        dim_layout.addWidget(self.lbl_dim_info)
+        scroll_layout.addWidget(dim_group)
+
+        # Signal Status Group
+        sig_group = QGroupBox("Signal Status")
+        sig_layout = QVBoxLayout(sig_group)
+        self.lbl_sig_info = QLabel()
+        self.lbl_sig_info.setTextFormat(Qt.TextFormat.RichText)
+        sig_layout.addWidget(self.lbl_sig_info)
+        scroll_layout.addWidget(sig_group)
+
+        # Event Status Group
+        event_group = QGroupBox("Event Status")
+        event_layout = QVBoxLayout(event_group)
+        self.lbl_event_info = QLabel()
+        self.lbl_event_info.setTextFormat(Qt.TextFormat.RichText)
+        event_layout.addWidget(self.lbl_event_info)
+        scroll_layout.addWidget(event_group)
+
+        # Panorama view for camera detections
+        pano_group = QGroupBox("Camera Panorama View (-90° to +90°)")
+        pano_layout = QVBoxLayout(pano_group)
+        self.panorama_view = PanoramaView()
+        self.panorama_view.setMinimumHeight(120)
+        pano_layout.addWidget(self.panorama_view)
+        scroll_layout.addWidget(pano_group)
+
+        scroll.setWidget(scroll_content)
+        layout.addWidget(scroll)
+
+        # Button box at bottom (outside scroll area)
         btn_box = QHBoxLayout()
         self.btn_spd = QPushButton("Change Speed")
         self.btn_hdg = QPushButton("Change Heading")
         self.btn_del = QPushButton("Delete")
         self.btn_high = QPushButton("Highlight Path")
         self.btn_close = QPushButton("Close")
-        
+
         self.btn_spd.clicked.connect(self.change_speed)
         self.btn_hdg.clicked.connect(self.change_heading)
-        self.btn_del.clicked.connect(self.accept) 
-        self.btn_high.clicked.connect(lambda: self.done(2)) 
+        self.btn_del.clicked.connect(self.accept)
+        self.btn_high.clicked.connect(lambda: self.done(2))
         self.btn_close.clicked.connect(self.reject)
-        
+
         btn_box.addWidget(self.btn_spd)
         btn_box.addWidget(self.btn_hdg)
         btn_box.addWidget(self.btn_del)
         btn_box.addWidget(self.btn_high)
         btn_box.addWidget(self.btn_close)
         layout.addLayout(btn_box)
-        
+
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_info)
-        self.timer.start(200) 
+        self.timer.start(200)
         self.update_info()
 
     def update_info(self):
+        from app.core.geometry import ecef_to_lla, ecef_heading, ecef_distance
+
         ship = current_project.get_ship_by_idx(self.ship_idx)
         if not ship:
-            self.lbl_info.setText("Ship not found.")
+            self.lbl_basic_info.setText("Ship not found.")
             return
-            
+
         t_now = 0.0
         if self.worker and self.worker.running:
             t_now = self.worker.current_time
-            
-        state = {'lat':0, 'lon':0, 'spd':0, 'hdg':0}
-        
+
+        # Get current dynamic state
+        state = {'lat': 0, 'lon': 0, 'spd': 0, 'hdg': 0, 'x': 0, 'y': 0, 'z': 0}
+        dyn = None
+
         if self.worker and self.ship_idx in self.worker.dynamic_ships:
             dyn = self.worker.dynamic_ships[self.ship_idx]
-            from app.core.geometry import ecef_to_lla
             lat, lon, _ = ecef_to_lla(dyn['x'], dyn['y'], dyn['z'])
-            state = {'lat': lat, 'lon': lon, 'spd': dyn.get('sog', dyn['spd']), 'hdg': dyn['hdg']}
+            state = {
+                'lat': lat, 'lon': lon,
+                'spd': dyn.get('sog', dyn['spd']),
+                'hdg': dyn['hdg'],
+                'x': dyn['x'], 'y': dyn['y'], 'z': dyn['z'],
+                'dist_traveled': dyn.get('dist_traveled', 0.0),
+                'following_path': dyn.get('following_path', False),
+                'mode': dyn.get('mode', None)
+            }
         elif self.parent().calculate_ship_state:
-            state = self.parent().calculate_ship_state(ship, t_now)
-            
-        eta_str = "Unknown"
-        
+            calc_state = self.parent().calculate_ship_state(ship, t_now)
+            state.update(calc_state)
+
+        # Calculate detections from THIS ship's perspective
+        self._update_panorama_detections()
+
+        # === Basic Information ===
+        ship_type = 'Random Target' if ship.idx >= 1000 else ('OwnShip' if ship.idx == current_project.settings.own_ship_idx else 'Manual Target')
+        basic_info = f"""
+        <b>Name:</b> {ship.name}<br>
+        <b>ID:</b> {ship.idx}<br>
+        <b>MMSI:</b> {ship.mmsi}<br>
+        <b>Type:</b> {ship_type}<br>
+        <b>Ship Class:</b> {getattr(ship, 'ship_class', 'CONTAINER')}
+        """
+        self.lbl_basic_info.setText(basic_info)
+
+        # === Navigation Status ===
+        # Format simulation time
+        sim_d = int(t_now // 86400)
+        sim_h = int((t_now % 86400) // 3600)
+        sim_m = int((t_now % 3600) // 60)
+        sim_s = int(t_now % 60)
+        sim_time_str = f"{sim_d}d {sim_h:02d}:{sim_m:02d}:{sim_s:02d}" if sim_d > 0 else f"{sim_h:02d}:{sim_m:02d}:{sim_s:02d}"
+
+        # Remaining time
+        eta_str = "N/A"
         if self.parent() and hasattr(self.parent(), 'sim_time_limit'):
-             remaining = max(0, self.parent().sim_time_limit - t_now)
-             d = int(remaining // 86400)
-             h = int((remaining % 86400) // 3600)
-             m = int((remaining % 3600) // 60)
-             s = int(remaining % 60)
-             rem_parts = []
-             if d > 0: rem_parts.append(f"{d}d")
-             if h > 0: rem_parts.append(f"{h}h")
-             if m > 0: rem_parts.append(f"{m}m")
-             rem_parts.append(f"{s}s")
-             eta_str = " ".join(rem_parts)
-        
+            remaining = max(0, self.parent().sim_time_limit - t_now)
+            rem_d = int(remaining // 86400)
+            rem_h = int((remaining % 86400) // 3600)
+            rem_m = int((remaining % 3600) // 60)
+            rem_s = int(remaining % 60)
+            if rem_d > 0:
+                eta_str = f"{rem_d}d {rem_h:02d}:{rem_m:02d}:{rem_s:02d}"
+            else:
+                eta_str = f"{rem_h:02d}:{rem_m:02d}:{rem_s:02d}"
+
+        # Speed in various units
+        spd_kn = state['spd']
+        spd_kmh = spd_kn * 1.852
+        spd_mps = spd_kn * 0.514444
+
+        # Mode info
+        mode_str = "Path Following" if state.get('following_path', False) else "Vector Mode"
+        if state.get('mode'):
+            mode_str = state['mode']
+
+        nav_info = f"""
+        <b>Simulation Time:</b> {sim_time_str} ({t_now:.1f}s)<br>
+        <b>Remaining:</b> {eta_str}<br>
+        <hr>
+        <b>Latitude:</b> {state['lat']:.6f}°<br>
+        <b>Longitude:</b> {state['lon']:.6f}°<br>
+        <b>Heading (COG):</b> {state['hdg']:.1f}°<br>
+        <hr>
+        <b>Speed (SOG):</b> {spd_kn:.2f} kn<br>
+        <b>Speed:</b> {spd_kmh:.2f} km/h | {spd_mps:.2f} m/s<br>
+        <hr>
+        <b>Mode:</b> {mode_str}<br>
+        <b>Distance Traveled:</b> {state.get('dist_traveled', 0.0)/1000:.2f} km
+        """
+        self.lbl_nav_info.setText(nav_info)
+
+        # === Relative to OwnShip ===
+        own_idx = current_project.settings.own_ship_idx
+        rel_info = "N/A (This is OwnShip)" if self.ship_idx == own_idx else "N/A"
+
+        if self.ship_idx != own_idx and self.worker:
+            own_dyn = self.worker.dynamic_ships.get(own_idx)
+            if own_dyn and dyn:
+                # Distance
+                dist_m = ecef_distance(own_dyn['x'], own_dyn['y'], own_dyn['z'],
+                                       dyn['x'], dyn['y'], dyn['z'])
+                dist_nm = dist_m / 1852.0
+                dist_km = dist_m / 1000.0
+
+                # True bearing from OwnShip to this ship
+                bearing_true = ecef_heading(own_dyn['x'], own_dyn['y'], own_dyn['z'],
+                                            dyn['x'], dyn['y'], dyn['z'])
+
+                # Relative bearing from OwnShip's heading
+                own_hdg = own_dyn['hdg']
+                rel_bearing = self._wrap_to_180(bearing_true - own_hdg)
+
+                # CPA/TCPA calculation
+                cpa_nm, tcpa_sec = self._calculate_cpa_tcpa(own_dyn, dyn)
+
+                # Format TCPA
+                if tcpa_sec is not None and tcpa_sec > 0:
+                    tcpa_m = int(tcpa_sec // 60)
+                    tcpa_s = int(tcpa_sec % 60)
+                    tcpa_str = f"{tcpa_m}m {tcpa_s}s"
+                elif tcpa_sec is not None and tcpa_sec <= 0:
+                    tcpa_str = "Passed"
+                else:
+                    tcpa_str = "N/A"
+
+                rel_info = f"""
+        <b>Distance:</b> {dist_nm:.2f} nm ({dist_km:.2f} km)<br>
+        <b>True Bearing:</b> {bearing_true:.1f}°<br>
+        <b>Relative Bearing:</b> {rel_bearing:.1f}°<br>
+        <hr>
+        <b>CPA:</b> {cpa_nm:.2f} nm<br>
+        <b>TCPA:</b> {tcpa_str}
+                """
+        self.lbl_rel_info.setText(rel_info)
+
+        # === Ship Dimensions ===
+        dim_info = f"""
+        <b>Length:</b> {getattr(ship, 'length_m', 300.0):.1f} m<br>
+        <b>Beam:</b> {getattr(ship, 'beam_m', 40.0):.1f} m<br>
+        <b>Draft:</b> {getattr(ship, 'draft_m', 15.0):.1f} m<br>
+        <b>Air Draft:</b> {getattr(ship, 'air_draft_m', 60.0):.1f} m<br>
+        <b>Visible Height:</b> {getattr(ship, 'height_m', 30.0):.1f} m
+        """
+        self.lbl_dim_info.setText(dim_info)
+
+        # === Signal Status ===
+        sig_lines = []
+        for sig_type in ['AIVDM', 'RATTM', 'Camera']:
+            enabled = ship.signals_enabled.get(sig_type, True)
+            interval = ship.signal_intervals.get(sig_type, 1.0)
+            status = '<span style="color:green;">ON</span>' if enabled else '<span style="color:red;">OFF</span>'
+            sig_lines.append(f"<b>{sig_type}:</b> {status} (Interval: {interval:.1f}s)")
+
+        sig_info = "<br>".join(sig_lines)
+        self.lbl_sig_info.setText(sig_info)
+
+        # === Event Status ===
         enabled_events_list = []
         for e in current_project.events:
             if e.enabled and e.target_ship_idx == self.ship_idx:
                 enabled_events_list.append(f"[Proj] {e.name}")
-        
+
         active_scenarios = []
         if app_state.loaded_scenarios:
             for scen in app_state.loaded_scenarios:
@@ -122,44 +319,214 @@ class TargetInfoDialog(QDialog):
                     for e in scen.events:
                         if e.enabled:
                             should_apply = False
-                            if scen.scope_mode == "ALL_SHIPS": should_apply = True
+                            if scen.scope_mode == "ALL_SHIPS":
+                                should_apply = True
                             elif scen.scope_mode == "OWN_ONLY":
-                                if e.target_ship_idx == current_project.settings.own_ship_idx: should_apply = True
+                                if e.target_ship_idx == current_project.settings.own_ship_idx:
+                                    should_apply = True
                             elif scen.scope_mode == "TARGET_ONLY":
-                                if e.target_ship_idx != current_project.settings.own_ship_idx: should_apply = True
+                                if e.target_ship_idx != current_project.settings.own_ship_idx:
+                                    should_apply = True
                             elif scen.scope_mode == "SELECTED_SHIPS":
-                                if e.target_ship_idx in scen.selected_ships: should_apply = True
-                            
+                                if e.target_ship_idx in scen.selected_ships:
+                                    should_apply = True
+
                             if should_apply and e.target_ship_idx == self.ship_idx:
                                 enabled_events_list.append(f"[Scen] {e.name}")
 
         events_str = "<br>".join(enabled_events_list) if enabled_events_list else "None"
         scen_str = ", ".join(active_scenarios) if active_scenarios else "None"
-        
-        sig_status = []
-        for k, v in ship.signals_enabled.items():
-            sig_status.append(f"{k}: {'ON' if v else 'OFF'}")
-        sig_str = ", ".join(sig_status)
 
-        info = f"""
-        <h3>{ship.name} (ID: {ship.idx})</h3>
-        <b>MMSI:</b> {ship.mmsi}<br>
-        <b>Type:</b> {'Random Target' if ship.idx >= 1000 else 'Manual Target'}<br>
-        <hr>
-        <b>Sim Time:</b> {t_now:.1f} s<br>
-        <b>Lat:</b> {state['lat']:.6f}<br>
-        <b>Lon:</b> {state['lon']:.6f}<br>
-        <b>Speed:</b> {state['spd']:.1f} kn<br>
-        <b>Heading:</b> {state['hdg']:.1f}°<br>
-        <b>Remaining:</b> {eta_str}<br>
-        <hr>
+        event_info = f"""
         <b>Active Scenario:</b> {scen_str}<br>
-        <b>Enabled Events:</b><br>
-        {events_str}<br>
-        <hr>
-        <b>Signals:</b> {sig_str}
+        <b>Enabled Events for this ship:</b><br>
+        {events_str}
         """
-        self.lbl_info.setText(info)
+        self.lbl_event_info.setText(event_info)
+
+    def _calculate_cpa_tcpa(self, own_dyn, tgt_dyn):
+        """Calculate CPA (Closest Point of Approach) and TCPA (Time to CPA)."""
+        from app.core.geometry import ecef_to_lla, ecef_distance
+
+        # Current positions
+        P_own = np.array([own_dyn['x'], own_dyn['y'], own_dyn['z']])
+        P_tgt = np.array([tgt_dyn['x'], tgt_dyn['y'], tgt_dyn['z']])
+
+        # Calculate velocities in ECEF
+        def calc_ecef_velocity(dyn):
+            lat, lon, _ = ecef_to_lla(dyn['x'], dyn['y'], dyn['z'])
+            spd_mps = dyn.get('sog', dyn['spd']) * 0.514444
+            hdg_rad = math.radians(dyn['hdg'])
+            lat_rad = math.radians(lat)
+            lon_rad = math.radians(lon)
+
+            # Local NED to ECEF
+            n_x = -math.sin(lat_rad) * math.cos(lon_rad)
+            n_y = -math.sin(lat_rad) * math.sin(lon_rad)
+            n_z = math.cos(lat_rad)
+
+            e_x = -math.sin(lon_rad)
+            e_y = math.cos(lon_rad)
+            e_z = 0.0
+
+            v_x = (n_x * math.cos(hdg_rad) + e_x * math.sin(hdg_rad)) * spd_mps
+            v_y = (n_y * math.cos(hdg_rad) + e_y * math.sin(hdg_rad)) * spd_mps
+            v_z = (n_z * math.cos(hdg_rad) + e_z * math.sin(hdg_rad)) * spd_mps
+
+            return np.array([v_x, v_y, v_z])
+
+        V_own = calc_ecef_velocity(own_dyn)
+        V_tgt = calc_ecef_velocity(tgt_dyn)
+
+        # Relative position and velocity
+        P_rel = P_tgt - P_own
+        V_rel = V_tgt - V_own
+
+        v_rel_sq = np.dot(V_rel, V_rel)
+
+        # Current distance
+        dist_m = ecef_distance(own_dyn['x'], own_dyn['y'], own_dyn['z'],
+                               tgt_dyn['x'], tgt_dyn['y'], tgt_dyn['z'])
+        current_cpa_nm = dist_m / 1852.0
+
+        if v_rel_sq < 1e-9:
+            # No relative motion
+            return current_cpa_nm, None
+
+        # TCPA = - (P_rel . V_rel) / |V_rel|^2
+        tcpa = -np.dot(P_rel, V_rel) / v_rel_sq
+
+        if tcpa <= 0:
+            # CPA already passed
+            return current_cpa_nm, tcpa
+
+        # Future positions at TCPA
+        P_own_future = P_own + V_own * tcpa
+        P_tgt_future = P_tgt + V_tgt * tcpa
+
+        cpa_m = np.linalg.norm(P_tgt_future - P_own_future)
+        cpa_nm = cpa_m / 1852.0
+
+        return cpa_nm, tcpa
+
+    def _wrap_to_180(self, deg):
+        """Wrap angle to [-180, 180] range."""
+        return ((deg + 180) % 360) - 180
+
+    def _update_panorama_detections(self):
+        """Calculate camera detections from this ship's perspective.
+
+        The ship is modeled as a 3D box (length x beam x height).
+        The visible width depends on which faces are visible,
+        determined by the angle between observer's view direction and target's heading.
+        Ships beyond camera d1 distance are filtered out.
+        """
+        from app.core.geometry import ecef_heading, ecef_distance
+
+        if not self.worker or not self.worker.running:
+            self.panorama_view.clear_detections()
+            return
+
+        # Get this ship's dynamic state (observer)
+        if self.ship_idx not in self.worker.dynamic_ships:
+            self.panorama_view.clear_detections()
+            return
+
+        observer_dyn = self.worker.dynamic_ships[self.ship_idx]
+        observer_hdg = observer_dyn['hdg']
+
+        # Get camera d1 distance (max visibility range)
+        camera_d1_nm = current_project.settings.camera_reception.d1
+        camera_d1_m = camera_d1_nm * 1852.0  # Convert NM to meters
+
+        detections = []
+        EPS = 1e-3
+
+        # Loop through all other ships
+        for other_ship in current_project.ships:
+            if other_ship.idx == self.ship_idx:
+                continue  # Skip self
+
+            if other_ship.idx not in self.worker.dynamic_ships:
+                continue
+
+            other_dyn = self.worker.dynamic_ships[other_ship.idx]
+
+            # Calculate true bearing from observer to target
+            bearing_true = ecef_heading(
+                observer_dyn['x'], observer_dyn['y'], observer_dyn['z'],
+                other_dyn['x'], other_dyn['y'], other_dyn['z']
+            )
+
+            # Calculate relative bearing
+            rel_bearing = self._wrap_to_180(bearing_true - observer_hdg)
+
+            # Skip if outside FOV [-90, +90]
+            if rel_bearing < -90 or rel_bearing > 90:
+                continue
+
+            # Calculate distance
+            dist_m = ecef_distance(
+                observer_dyn['x'], observer_dyn['y'], observer_dyn['z'],
+                other_dyn['x'], other_dyn['y'], other_dyn['z']
+            )
+            range_m = max(dist_m, EPS)
+
+            # Skip if ship is beyond camera d1 distance
+            if dist_m >= camera_d1_m:
+                continue
+
+            # Calculate panorama coordinates
+            x_norm = (rel_bearing + 90.0) / 180.0
+            cx_px = x_norm * self.PANO_W_PX
+            cy_px = self.CY_RATIO * self.PANO_H_PX
+
+            # Ship dimensions
+            length_m = getattr(other_ship, 'length_m', 300.0)
+            beam_m = getattr(other_ship, 'beam_m', 40.0)
+            height_m = getattr(other_ship, 'height_m', 30.0)
+
+            # Calculate the viewing angle relative to target ship's heading
+            tgt_heading = other_dyn['hdg']
+
+            # Angle from target ship's bow to observer
+            bearing_from_target = (bearing_true + 180.0) % 360.0
+            view_angle = self._wrap_to_180(bearing_from_target - tgt_heading)
+
+            # Calculate projected width based on view angle
+            # |sin| gives contribution from side (length), |cos| gives contribution from front/back (beam)
+            view_angle_rad = math.radians(view_angle)
+            projected_width_m = abs(math.sin(view_angle_rad)) * length_m + abs(math.cos(view_angle_rad)) * beam_m
+
+            # Height is always the same (viewing from sea level)
+            projected_height_m = height_m
+
+            # Convert to pixels based on distance
+            w_px = max(self.W_MIN, min(self.W_MAX, self.K_H * (projected_width_m / range_m)))
+            h_px = max(self.H_MIN, min(self.H_MAX, self.K_H * (projected_height_m / range_m)))
+
+            # Clamp bbox to panorama bounds
+            x1 = max(0, cx_px - w_px / 2)
+            x2 = min(self.PANO_W_PX, cx_px + w_px / 2)
+            y1 = max(0, cy_px - h_px / 2)
+            y2 = min(self.PANO_H_PX, cy_px + h_px / 2)
+            w_px = x2 - x1
+            h_px = y2 - y1
+            cx_px = (x1 + x2) / 2
+            cy_px = (y1 + y2) / 2
+
+            detection = {
+                'ship_idx': other_ship.idx,
+                'ship_name': other_ship.name,
+                'rel_bearing': rel_bearing,
+                'cx_px': cx_px,
+                'cy_px': cy_px,
+                'w_px': w_px,
+                'h_px': h_px
+            }
+            detections.append(detection)
+
+        self.panorama_view.set_detections(detections)
 
     def change_speed(self):
         ship = current_project.get_ship_by_idx(self.ship_idx)
@@ -263,6 +630,7 @@ class SimulationPanel(QWidget):
             data = dlg.get_data()
             area_id = data.get("area_id", -1)
             R = data["R"]
+            ship_class = data.get("ship_class", "CONTAINER")
             N_AI_only = data["N_AI_only"]
             N_RA_only = data["N_RA_only"]
             N_both = data["N_both"]
@@ -272,7 +640,7 @@ class SimulationPanel(QWidget):
                 msgbox.show_warning(self, "Warning", "Own Ship is not set. Cannot generate random targets.")
                 return
 
-            self.generate_random_targets_logic(own_ship, R, N_AI_only, N_RA_only, N_both)
+            self.generate_random_targets_logic(own_ship, R, N_AI_only, N_RA_only, N_both, area_id, ship_class)
 
     def action_clear_random_targets(self):
         targets = [s for s in current_project.ships if s.idx >= 1000]
@@ -455,7 +823,7 @@ class SimulationPanel(QWidget):
         filter_layout = QHBoxLayout()
         filter_layout.addWidget(QLabel("Filter:"))
         self.log_filter_combo = QComboBox()
-        self.log_filter_combo.addItems(["ALL", "AIVDM", "RATTM"])
+        self.log_filter_combo.addItems(["ALL", "AIVDM", "RATTM", "CAMERA"])
         filter_layout.addWidget(self.log_filter_combo)
         
         self.log_keyword_edit = QLineEdit()
@@ -545,8 +913,9 @@ class SimulationPanel(QWidget):
         
         return new_lat, new_lon, new_hdg
 
-    def generate_random_targets_logic(self, own_ship, R_nm, N_ai, N_ra, N_both, area_id=-1):
-        import numpy as np # NumPy for high-speed computation
+    def generate_random_targets_logic(self, own_ship, R_nm, N_ai, N_ra, N_both, area_id=-1, ship_class="CONTAINER"):
+        import numpy as np  # NumPy for high-speed computation
+        from app.core.models.ship import get_ship_dimensions
 
         seed_val = (current_project.seed + len(current_project.ships)) % (2**32 - 1)
         random.seed(seed_val)
@@ -684,25 +1053,34 @@ class SimulationPanel(QWidget):
             new_ship = ShipData(new_idx, f"Random-{r_num}")
             new_ship.mmsi = random.randint(100000000, 999999999)
             new_ship.is_generated = True
-            
+
             new_ship.raw_points = raw_pixels
             new_ship.raw_speeds = {0: spd}
-            
+
             new_ship.resampled_points = raw_pixels
-            
+
+            # Set ship class and dimensions
+            new_ship.ship_class = ship_class
+            dims = get_ship_dimensions(ship_class)
+            new_ship.length_m = dims[0]
+            new_ship.beam_m = dims[1]
+            new_ship.draft_m = dims[2]
+            new_ship.air_draft_m = dims[3]
+            new_ship.height_m = dims[3] * 0.5  # Visible height = half of air draft
+
             if s_type == "AI":
                 new_ship.signals_enabled['AIVDM'] = True
                 new_ship.signals_enabled['RATTM'] = False
-                new_ship.signals_enabled['Camera'] = False
+                new_ship.signals_enabled['Camera'] = True
             elif s_type == "RA":
                 new_ship.signals_enabled['AIVDM'] = False
                 new_ship.signals_enabled['RATTM'] = True
-                new_ship.signals_enabled['Camera'] = False
+                new_ship.signals_enabled['Camera'] = True
             else:
                 new_ship.signals_enabled['AIVDM'] = True
                 new_ship.signals_enabled['RATTM'] = True
-                new_ship.signals_enabled['Camera'] = False
-            
+                new_ship.signals_enabled['Camera'] = True
+
             current_project.ships.append(new_ship)
             
         self.refresh_tables()
@@ -752,14 +1130,11 @@ class SimulationPanel(QWidget):
         for r in range(table.rowCount()):
             for c in range(table.columnCount()):
                 is_checked = True
-                if c > 0 and talkers[c-1] == "Camera":
-                    is_checked = False
 
                 if r > 0 and c > 0:
                     ship = ships[r-1]
                     talker = talkers[c-1]
-                    default_val = False if talker == "Camera" else True
-                    is_checked = ship.signals_enabled.get(talker, default_val)
+                    is_checked = ship.signals_enabled.get(talker, True)
 
                 widget = self._create_on_off_cell(is_checked)
                 checkbox = widget.findChild(QCheckBox)

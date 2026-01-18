@@ -212,25 +212,13 @@ class SettingsDialog(QDialog):
 
         main_layout.addWidget(self.reception_tabs)
 
-        # 기존 고정 확률 방식 (하위 호환성)
-        legacy_group = QGroupBox("Legacy Dropout (when reception model disabled)")
-        legacy_layout = QFormLayout(legacy_group)
-        self.drop_spins = {}
-        for key in ["AIVDM", "RATTM", "Camera"]:
-            s = QDoubleSpinBox()
-            s.setRange(0, 1)
-            s.setSingleStep(0.01)
-            s.setValue(current_project.settings.dropout_probs.get(key, 0.1))
-            label = QLabel(f"{key} Dropout:")
-            legacy_layout.addRow(label, s)
-            self.drop_spins[key] = s
-        main_layout.addWidget(legacy_group)
-
         self._on_reception_enabled_changed()
         self.stack.addWidget(w)
 
     def _create_reception_tab(self, tab_type: str, config, is_arpa: bool = False):
         """각 신호 타입별 수신 모델 탭 생성"""
+        is_camera = (tab_type == "camera")
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
 
@@ -275,13 +263,25 @@ class SettingsDialog(QDialog):
         spin_p1.setRange(0, 1)
         spin_p1.setSingleStep(0.01)
         spin_p1.setDecimals(2)
-        spin_p1.setValue(config.p1)
+        # Camera: p1 is fixed at 1.0 and disabled
+        if is_camera:
+            spin_p1.setValue(1.0)
+            spin_p1.setEnabled(False)
+            spin_p1.setToolTip("Camera p1 is fixed at 1.0 (complete block at d1)")
+        else:
+            spin_p1.setValue(config.p1)
         spin_p1.valueChanged.connect(lambda v: self._update_preview())
         simple_layout.addRow("At d1 dropout (p1):", spin_p1)
 
         # Full block at d1
         chk_full_block = QCheckBox()
-        chk_full_block.setChecked(config.full_block_at_d1)
+        # Camera: full_block_at_d1 is always ON and disabled
+        if is_camera:
+            chk_full_block.setChecked(True)
+            chk_full_block.setEnabled(False)
+            chk_full_block.setToolTip("Camera always blocks completely at d >= d1")
+        else:
+            chk_full_block.setChecked(config.full_block_at_d1)
         chk_full_block.stateChanged.connect(lambda v: self._update_preview())
         simple_layout.addRow("d >= d1 에서 완전 차단:", chk_full_block)
 
@@ -841,8 +841,6 @@ class SettingsDialog(QDialog):
         current_project.settings.speed_variance = self.spin_speed_var.value()
         current_project.settings.path_thickness = self.spin_path_th.value()
         current_project.settings.traveled_path_thickness = self.spin_travel_th.value()
-        for k, s in self.drop_spins.items():
-            current_project.settings.dropout_probs[k] = s.value()
 
         # Reception Model 설정 저장
         current_project.settings.reception_model_enabled = self.chk_reception_enabled.isChecked()

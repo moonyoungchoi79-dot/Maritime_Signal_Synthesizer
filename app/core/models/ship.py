@@ -2,6 +2,22 @@ import numpy as np
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple
 
+# Ship class dimensions: (length_m, beam_m, draft_m, air_draft_m)
+SHIP_CLASS_DIMENSIONS = {
+    "CONTAINER": (300.0, 40.0, 15.0, 60.0),
+    "TANKER": (250.0, 45.0, 16.0, 50.0),
+    "CARGO": (200.0, 32.0, 12.0, 45.0),
+    "PASSENGER": (180.0, 28.0, 7.0, 55.0),
+    "FISHING": (30.0, 8.0, 3.0, 12.0),
+    "BUOY": (2.0, 2.0, 1.0, 2.0),
+    "OTHER": (50.0, 12.0, 4.0, 20.0),
+}
+
+def get_ship_dimensions(ship_class: str) -> tuple:
+    """Get ship dimensions by class. Returns (length, beam, draft, air_draft)."""
+    return SHIP_CLASS_DIMENSIONS.get(ship_class, SHIP_CLASS_DIMENSIONS["OTHER"])
+
+
 @dataclass
 class ShipData:
     idx: int
@@ -34,6 +50,15 @@ class ShipData:
     packed_data: Optional[np.ndarray] = None 
     
     is_generated: bool = False
+
+    # Ship class/type and dimensions (for camera bbox calculation)
+    # Default values per specification: CONTAINER, 300m/40m/15m/60m
+    ship_class: str = "CONTAINER"  # Options: CONTAINER, FISHING, TANKER, CARGO, PASSENGER, BUOY
+    length_m: float = 300.0        # Ship length (meters)
+    beam_m: float = 40.0           # Ship beam/width (meters)
+    draft_m: float = 15.0          # Ship draft (meters)
+    air_draft_m: float = 60.0      # Air draft above waterline (meters)
+    height_m: float = 30.0         # Visible height above waterline for camera (meters)
 
     def get_display_segments(self) -> List[List[Tuple[float, float]]]:
         """

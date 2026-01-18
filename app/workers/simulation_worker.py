@@ -20,16 +20,32 @@ from app.core.geometry import (
 )
 from app.core.nmea import calculate_checksum, encode_ais_payload
 
+# Panorama constants (per specification B-3)
+PANO_W_PX = 1920
+PANO_H_PX = 320
+K_H = 2200
+H_MIN, H_MAX = 6, 220
+W_MIN, W_MAX = 6, 300
+EPS = 1e-3
+CY_RATIO = 0.60  # cy_px = 0.60 * pano_h_px
+
+
+def wrap_to_180(deg):
+    """Wrap angle to [-180, 180] range for relative bearing calculation."""
+    return ((deg + 180) % 360) - 180
+
+
 class SimulationWorker(QObject):
-    signal_generated = pyqtSignal(str) 
+    signal_generated = pyqtSignal(str)
     log_message = pyqtSignal(str)
     performance_updated = pyqtSignal(str)
-    positions_updated = pyqtSignal(dict) 
-    export_data_ready = pyqtSignal(bool) 
+    positions_updated = pyqtSignal(dict)
+    export_data_ready = pyqtSignal(bool)
     finished = pyqtSignal()
     random_targets_generated = pyqtSignal()
     event_triggered = pyqtSignal(str, int)
-    
+    camera_detections_updated = pyqtSignal(list)  # List of detection dicts for panorama view
+
     def __init__(self, ip, port, speed_mult, duration_sec):
         super().__init__()
         self.ip = ip
@@ -53,6 +69,9 @@ class SimulationWorker(QObject):
         self.dynamic_ships = {}
         self.events = []
         self.max_steps = 0
+        # Camera burst loss state tracking per ship (B-5)
+        self.camera_burst_states = {}  # {ship_idx: {'in_burst': bool, 'end_time': float}}
+        self.camera_detections = []  # Current frame's camera detections for panorama
 
     def reset_triggered_event(self, event_id: str):
         """Remove ID from triggered_events to allow re-evaluation when event is modified"""
@@ -252,7 +271,10 @@ class SimulationWorker(QObject):
                 ts_val = self.proj.start_time + datetime.timedelta(seconds=t_m)
                 
                 self.check_events(t_m)
-                  
+
+                # Clear camera detections for this frame
+                self.camera_detections = []
+
                 current_positions = {}
                 
                 own_state = None
@@ -272,6 +294,9 @@ class SimulationWorker(QObject):
                 current_real_time = time.time()
                 if current_real_time - self.last_gui_update_time > 0.05:
                     self.positions_updated.emit(current_positions)
+                    # Emit camera detections for panorama view (C-3: throttled with GUI update)
+                    if self.camera_detections:
+                        self.camera_detections_updated.emit(list(self.camera_detections))
                     self.last_gui_update_time = current_real_time
 
                 m += 1
@@ -890,6 +915,23 @@ class SimulationWorker(QObject):
                         self.last_emission_times[(ship.idx, stype)] = current_sim_time
         self.try_emit_distance_based(self.gen_ttm(base, state), "RATTM", jitter_ts, tgt.idx, dist_nm)
 
+        # Generate Camera signal (B-1)
+        if ship and own_dyn and tgt_dyn:
+            if ship.signals_enabled.get("Camera", True):
+                cam_raw, detection = self.gen_cam_signal(own_dyn, tgt, tgt_dyn, dist_nm)
+                if cam_raw and detection:
+                    current_sim_time = (jitter_ts - self.proj.start_time).total_seconds()
+                    # Check interval
+                    interval = ship.signal_intervals.get("Camera", 1.0)
+                    last_time = self.last_emission_times.get((ship.idx, "Camera"), -float('inf'))
+                    if (current_sim_time + 1e-9) >= (last_time + interval):
+                        # Check dropout with burst support (B-4, B-5)
+                        if not self.check_camera_dropout_with_burst(tgt.idx, dist_nm, current_sim_time):
+                            self.send_nmea(cam_raw, jitter_ts)
+                            self.last_emission_times[(ship.idx, "Camera")] = current_sim_time
+                            # Add to current frame's detections for panorama view
+                            self.camera_detections.append(detection)
+
     def try_emit(self, raw, stype, ts_obj, ship_idx):
         ship = self.proj.get_ship_by_idx(ship_idx)
         if not ship: return
@@ -947,3 +989,127 @@ class SimulationWorker(QObject):
         utc_time = dt.strftime("%H%M%S.%f")[:9]
         raw = f"$RATTM,{tgt_num:02d},1.5,45.0,T,{state['sog_knots']:.1f},{state['cog_true_deg']:.1f},T,0.5,10.0,N,b,T,,{utc_time},A"
         return f"{raw}*{calculate_checksum(raw[1:])}"
+
+    def gen_cam_signal(self, own_dyn, tgt_ship, tgt_dyn, dist_nm):
+        """
+        Generate $CAMERA NMEA sentence for camera detection.
+        Returns tuple: (raw_nmea, detection_dict) or (None, None) if out of FOV.
+
+        The ship is modeled as a 3D box (length x beam x height).
+        The visible width in panorama depends on which faces are visible,
+        determined by the angle between observer's view direction and target's heading.
+        """
+        # Calculate true bearing from own ship to target
+        bearing_true = ecef_heading(own_dyn['x'], own_dyn['y'], own_dyn['z'],
+                                    tgt_dyn['x'], tgt_dyn['y'], tgt_dyn['z'])
+        own_heading = own_dyn['hdg']
+
+        # Calculate relative bearing (A-2)
+        rel_bearing = wrap_to_180(bearing_true - own_heading)
+
+        # Check if in FOV [-90, +90] (A-2)
+        if rel_bearing < -90 or rel_bearing > 90:
+            return None, None
+
+        # Calculate panorama x coordinate
+        x_norm = (rel_bearing + 90.0) / 180.0
+        cx_px = x_norm * PANO_W_PX
+        cy_px = CY_RATIO * PANO_H_PX
+
+        # Ship dimensions
+        range_m = dist_nm * 1852.0
+        length_m = getattr(tgt_ship, 'length_m', 300.0)
+        beam_m = getattr(tgt_ship, 'beam_m', 40.0)
+        height_m = getattr(tgt_ship, 'height_m', 30.0)  # Ship height above waterline
+
+        # Calculate the viewing angle relative to target ship's heading
+        # This determines which faces of the ship are visible
+        tgt_heading = tgt_dyn['hdg']
+
+        # Angle from target ship's bow to observer (reverse of bearing_true)
+        # bearing_true: direction from observer to target
+        # We need: direction from target to observer, relative to target's heading
+        bearing_from_target = (bearing_true + 180.0) % 360.0
+        view_angle = wrap_to_180(bearing_from_target - tgt_heading)
+
+        # view_angle interpretation:
+        # 0° = viewing from bow (front face: beam x height)
+        # 90° = viewing from starboard (side face: length x height)
+        # 180° or -180° = viewing from stern (back face: beam x height)
+        # -90° = viewing from port (side face: length x height)
+
+        # Calculate projected width based on view angle
+        # The visible width is a combination of length and beam faces
+        view_angle_rad = math.radians(view_angle)
+        # |sin| gives contribution from side (length), |cos| gives contribution from front/back (beam)
+        projected_width_m = abs(math.sin(view_angle_rad)) * length_m + abs(math.cos(view_angle_rad)) * beam_m
+
+        # Height is always the same (viewing from sea level, seeing only the side)
+        projected_height_m = height_m
+
+        # Convert to pixels based on distance
+        w_px = max(W_MIN, min(W_MAX, K_H * (projected_width_m / max(range_m, EPS))))
+        h_px = max(H_MIN, min(H_MAX, K_H * (projected_height_m / max(range_m, EPS))))
+
+        # Clamp bbox to panorama bounds
+        x1 = max(0, cx_px - w_px / 2)
+        x2 = min(PANO_W_PX, cx_px + w_px / 2)
+        y1 = max(0, cy_px - h_px / 2)
+        y2 = min(PANO_H_PX, cy_px + h_px / 2)
+        w_px = x2 - x1
+        h_px = y2 - y1
+        cx_px = (x1 + x2) / 2
+        cy_px = (y1 + y2) / 2
+
+        # Build NMEA sentence
+        ship_class = getattr(tgt_ship, 'ship_class', 'CONTAINER')
+        raw = f"$CAMERA,{tgt_ship.idx},{ship_class},{rel_bearing:.2f},{PANO_W_PX},{PANO_H_PX},{cx_px:.2f},{cy_px:.2f},{w_px:.2f},{h_px:.2f}"
+        checksum = calculate_checksum(raw[1:])
+        nmea_str = f"{raw}*{checksum}"
+
+        # Detection dict for panorama view
+        detection = {
+            'ship_idx': tgt_ship.idx,
+            'ship_name': tgt_ship.name,
+            'rel_bearing': rel_bearing,
+            'cx_px': cx_px,
+            'cy_px': cy_px,
+            'w_px': w_px,
+            'h_px': h_px
+        }
+
+        return nmea_str, detection
+
+    def check_camera_dropout_with_burst(self, ship_idx, dist_nm, current_time):
+        """
+        Check camera dropout with burst loss support (B-4, B-5).
+        Returns True if signal should be dropped.
+        """
+        config = self.proj.settings.camera_reception
+
+        # Check if currently in burst (B-5)
+        burst_state = self.camera_burst_states.get(ship_idx, {'in_burst': False, 'end_time': 0})
+        if burst_state['in_burst']:
+            if current_time < burst_state['end_time']:
+                return True  # In burst, always dropout
+            else:
+                # Burst ended
+                burst_state['in_burst'] = False
+                self.camera_burst_states[ship_idx] = burst_state
+
+        # Calculate base dropout probability (B-4)
+        prob = self.calculate_dropout_probability(dist_nm, config)
+
+        # Random dropout check
+        if random.random() < prob:
+            # Check for burst start if enabled (B-5)
+            if config.burst_enabled:
+                burst_prob = min(1.0, prob * config.burst_trigger_mult)
+                if random.random() < burst_prob:
+                    duration = random.uniform(config.burst_min_sec, config.burst_max_sec)
+                    self.camera_burst_states[ship_idx] = {
+                        'in_burst': True,
+                        'end_time': current_time + duration
+                    }
+            return True
+        return False

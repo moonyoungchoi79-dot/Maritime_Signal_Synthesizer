@@ -34,11 +34,16 @@ def parse_nmea_fields(raw):
     header = parts[0]
     if header.startswith('$') or header.startswith('!'):
         header = header[1:]
-    
-    fields['talker'] = header[:2]
-    fields['sentence_type'] = header[2:]
+
+    # Special handling for CAMERA sentence (no standard talker)
+    if header == 'CAMERA':
+        fields['talker'] = ''
+        fields['sentence_type'] = 'CAMERA'
+    else:
+        fields['talker'] = header[:2]
+        fields['sentence_type'] = header[2:]
     fields['raw'] = raw_str
-    
+
     stype = fields['sentence_type']
     
     try:
@@ -73,7 +78,25 @@ def parse_nmea_fields(raw):
              if len(parts) > 1:
                 try: fields['target_no'] = int(parts[1])
                 except: pass
-                 
+
+        elif stype == 'CAMERA':
+            # Camera detection signal: $CAMERA,track_id,class,rel_bearing,pano_w,pano_h,cx,cy,w,h*CS
+            if len(parts) >= 10:
+                try:
+                    fields['track_id'] = parts[1]
+                    fields['ship_class'] = parts[2]
+                    fields['rel_bearing_deg'] = float(parts[3]) if parts[3] else 0.0
+                    fields['pano_w_px'] = int(parts[4]) if parts[4] else 1920
+                    fields['pano_h_px'] = int(parts[5]) if parts[5] else 320
+                    fields['bbox_cx_px'] = float(parts[6]) if parts[6] else 0.0
+                    fields['bbox_cy_px'] = float(parts[7]) if parts[7] else 0.0
+                    fields['bbox_w_px'] = float(parts[8]) if parts[8] else 0.0
+                    # parts[9] may contain checksum after '*'
+                    bbox_h_str = parts[9].split('*')[0] if '*' in parts[9] else parts[9]
+                    fields['bbox_h_px'] = float(bbox_h_str) if bbox_h_str else 0.0
+                except:
+                    pass
+
         if 'lat_deg' in fields and 'lon_deg' in fields:
              fields['utm_easting_m'] = 0.0
              fields['utm_northing_m'] = 0.0

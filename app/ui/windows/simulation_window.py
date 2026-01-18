@@ -66,6 +66,7 @@ class SimulationWindow(QWidget):
         if dlg.exec() == QDialog.DialogCode.Accepted:
             data = dlg.get_data()
             R = data["R"]
+            ship_class = data.get("ship_class", "CONTAINER")
             N_AI_only = data["N_AI_only"]
             N_RA_only = data["N_RA_only"]
             N_both = data["N_both"]
@@ -74,12 +75,12 @@ class SimulationWindow(QWidget):
             if not own_ship:
                 QMessageBox.warning(self, "Warning", "자선(Own Ship)이 설정되어 있지 않습니다. 랜덤 타겟을 생성할 수 없습니다.")
                 return
-            
+
             if not own_ship.raw_points:
                 QMessageBox.warning(self, "Warning", "자선(Own Ship)의 경로 데이터가 없습니다. 메인 화면에서 경로를 먼저 생성해주세요.")
                 return
 
-            self.generate_random_targets_logic(own_ship, R, N_AI_only, N_RA_only, N_both)
+            self.generate_random_targets_logic(own_ship, R, N_AI_only, N_RA_only, N_both, ship_class)
 
     def action_clear_random_targets(self):
         targets = [s for s in current_project.ships if s.idx >= 1000]
@@ -252,7 +253,9 @@ class SimulationWindow(QWidget):
         val = self.duration_input.get_seconds()
         self.duration_input.set_seconds(val + 600)
 
-    def generate_random_targets_logic(self, own_ship, R_nm, N_ai, N_ra, N_both):
+    def generate_random_targets_logic(self, own_ship, R_nm, N_ai, N_ra, N_both, ship_class="CONTAINER"):
+        from app.core.models.ship import get_ship_dimensions
+
         # Set deterministic seed for RTG
         seed_val = (current_project.seed + len(current_project.ships)) % (2**32 - 1)
         random.seed(seed_val)
@@ -375,21 +378,30 @@ class SimulationWindow(QWidget):
             
             # 2. Populate Simulation Data
             new_ship.resampled_points = raw_pixels
-            
+
+            # Set ship class and dimensions
+            new_ship.ship_class = ship_class
+            dims = get_ship_dimensions(ship_class)
+            new_ship.length_m = dims[0]
+            new_ship.beam_m = dims[1]
+            new_ship.draft_m = dims[2]
+            new_ship.air_draft_m = dims[3]
+            new_ship.height_m = dims[3] * 0.5  # Visible height = half of air draft
+
             # Set Signals
             if s_type == "AI":
                 new_ship.signals_enabled['AIVDM'] = True
                 new_ship.signals_enabled['RATTM'] = False
-                new_ship.signals_enabled['Camera'] = False
+                new_ship.signals_enabled['Camera'] = True
             elif s_type == "RA":
                 new_ship.signals_enabled['AIVDM'] = False
                 new_ship.signals_enabled['RATTM'] = True
-                new_ship.signals_enabled['Camera'] = False
+                new_ship.signals_enabled['Camera'] = True
             else:
                 new_ship.signals_enabled['AIVDM'] = True
                 new_ship.signals_enabled['RATTM'] = True
-                new_ship.signals_enabled['Camera'] = False
-            
+                new_ship.signals_enabled['Camera'] = True
+
             current_project.ships.append(new_ship)
             
         # 4. Real-time Update

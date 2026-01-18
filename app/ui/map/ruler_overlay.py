@@ -54,21 +54,30 @@ class RulerOverlay(QWidget):
 
         painter.setFont(QFont("Arial", 8))
         
+        # Determine decimal places based on deg_step
+        if deg_step < 0.1:
+            decimals = 2
+        elif deg_step < 1:
+            decimals = 1
+        else:
+            decimals = 0
+
+        def fmt(val):
+            if decimals == 0:
+                return f"{int(round(val))}"
+            else:
+                return f"{val:.{decimals}f}"
+
         for i in range(start_lon_idx, end_lon_idx + 1):
             lon_deg = i * deg_step
             sx = lon_deg * scale
             vx = self.view.mapFromScene(sx, scene_rect.top()).x()
-            
+
             if 25 <= vx <= width:
                 painter.setPen(QPen(Qt.GlobalColor.black, 1))
-                painter.drawLine(vx, 0, vx, 5) 
-                
+                painter.drawLine(vx, 0, vx, 5)
 
                 norm_lon = normalize_lon(lon_deg)
-                
-
-                def fmt(val):
-                    return f"{val:.1f}" if abs(val - round(val)) > 1e-9 else f"{int(round(val))}"
 
                 txt = f"{fmt(norm_lon)}({fmt(lon_deg)})"
                 
@@ -90,15 +99,13 @@ class RulerOverlay(QWidget):
             lat_deg = i * deg_step
             sy = -lat_deg * scale
             vy = self.view.mapFromScene(scene_rect.left(), sy).y()
-            
+
             if 25 <= vy <= height:
                 painter.setPen(QPen(Qt.GlobalColor.black, 1))
                 painter.drawLine(0, vy, 5, vy)
                 painter.save()
                 painter.translate(15, vy + 4)
-                
-                def fmt(val):
-                    return f"{val:.1f}" if abs(val - round(val)) > 1e-9 else f"{int(round(val))}"
+
                 txt = fmt(lat_deg)
                 
                 is_zero = (abs(lat_deg) < 0.001)
