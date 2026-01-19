@@ -262,7 +262,7 @@ class SimulationWorker(QObject):
             self.log_message.emit(f"Starting Simulation UDP->{self.ip}:{self.port} Speed={self.speed_mult}x")
             self.temp_file_handle = tempfile.TemporaryFile(mode='w+', encoding='utf-8')
 
-            # 결정론적 시드 설정 (재현 가능한 시뮬레이션)
+            # 시드 설정 (재현 가능한 시뮬레이션)
             seed_val = self.proj.seed % (2**32 - 1)
             random.seed(seed_val)
             np.random.seed(seed_val)
