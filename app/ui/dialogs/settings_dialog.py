@@ -36,7 +36,7 @@ import math
 import numpy as np
 
 from app.core.models.project import current_project
-from app.core.models.settings import RECEPTION_PRESETS, ReceptionModelConfig, ARPATrackConfig
+from app.core.models.settings import RECEPTION_PRESETS, ReceptionModelConfig
 
 
 class SettingsDialog(QDialog):
@@ -47,7 +47,7 @@ class SettingsDialog(QDialog):
 
     카테고리:
         - Appearance: 외관 설정 (테마, 색상, 경로 두께)
-        - Reception Model: 거리 기반 수신 확률 모델 (AIS, Radar, ARPA, Camera)
+        - Reception Model: 거리 기반 수신 확률 모델 (AIS, Radar, Camera)
         - Object: 자선 지정 및 객체 목록 관리
         - Signal: 신호 노이즈 및 AIS 프래그먼트 확률
 
@@ -206,7 +206,7 @@ class SettingsDialog(QDialog):
         수신 모델(Reception Model) 설정 페이지를 초기화합니다.
 
         거리 기반 신호 수신 확률 모델을 설정합니다.
-        AIS, Radar, ARPA, Camera 각각에 대해 독립적인 설정이 가능합니다.
+        AIS, Radar, Camera 각각에 대해 독립적인 설정이 가능합니다.
         프리셋(Realistic, Stable, Harsh)을 제공하며 커스텀 설정도 가능합니다.
         """
         w = QWidget()
@@ -249,10 +249,6 @@ class SettingsDialog(QDialog):
         radar_tab = self._create_reception_tab("radar", current_project.settings.radar_detect)
         self.reception_tabs.addTab(radar_tab, "Radar")
 
-        # ARPA 탭 (추가 설정 포함)
-        arpa_tab = self._create_reception_tab("arpa", current_project.settings.arpa_track, is_arpa=True)
-        self.reception_tabs.addTab(arpa_tab, "ARPA")
-
         # Camera 탭
         camera_tab = self._create_reception_tab("camera", current_project.settings.camera_reception)
         self.reception_tabs.addTab(camera_tab, "CAMERA")
@@ -266,14 +262,13 @@ class SettingsDialog(QDialog):
         self._on_reception_enabled_changed()
         self.stack.addWidget(w)
 
-    def _create_reception_tab(self, tab_type: str, config, is_arpa: bool = False):
+    def _create_reception_tab(self, tab_type: str, config):
         """
         신호 타입별 수신 모델 설정 탭을 생성합니다.
 
         매개변수:
-            tab_type: 신호 타입 ('ais', 'radar', 'arpa', 'camera')
+            tab_type: 신호 타입 ('ais', 'radar', 'camera')
             config: 현재 수신 모델 설정 객체
-            is_arpa: ARPA 전용 설정 포함 여부
 
         반환값:
             QScrollArea: 생성된 탭 위젯
@@ -391,23 +386,6 @@ class SettingsDialog(QDialog):
         spin_burst_mult.setValue(config.burst_trigger_mult)
         adv_layout.addRow("Burst trigger multiplier:", spin_burst_mult)
 
-        # ARPA 전용 설정
-        spin_coast = None
-        spin_reacquire = None
-        if is_arpa:
-            arpa_config = config  # ARPATrackConfig
-            spin_coast = QDoubleSpinBox()
-            spin_coast.setRange(0, 60)
-            spin_coast.setValue(arpa_config.coast_time_sec)
-            spin_coast.setSuffix(" s")
-            adv_layout.addRow("Coast time (track hold):", spin_coast)
-
-            spin_reacquire = QDoubleSpinBox()
-            spin_reacquire.setRange(0, 1)
-            spin_reacquire.setSingleStep(0.05)
-            spin_reacquire.setValue(arpa_config.reacquire_prob)
-            adv_layout.addRow("Reacquire probability:", spin_reacquire)
-
         layout.addWidget(adv_group)
         layout.addStretch()
 
@@ -419,8 +397,7 @@ class SettingsDialog(QDialog):
             'd0': spin_d0, 'd1': spin_d1, 'p0': spin_p0, 'p1': spin_p1,
             'full_block': chk_full_block, 'curve': combo_curve,
             'burst_enabled': chk_burst, 'burst_min': spin_burst_min,
-            'burst_max': spin_burst_max, 'burst_mult': spin_burst_mult,
-            'coast': spin_coast, 'reacquire': spin_reacquire
+            'burst_max': spin_burst_max, 'burst_mult': spin_burst_mult
         }
 
         scroll.setWidget(tab_widget)
@@ -471,7 +448,6 @@ class SettingsDialog(QDialog):
             self.plot_lines = {
                 'ais': self.preview_plot.plot(pen=pg.mkPen('b', width=2), name='AIS'),
                 'radar': self.preview_plot.plot(pen=pg.mkPen('g', width=2), name='Radar'),
-                'arpa': self.preview_plot.plot(pen=pg.mkPen(color=(255, 165, 0), width=2), name='ARPA'),
                 'camera': self.preview_plot.plot(pen=pg.mkPen('r', width=2), name='CAMERA'),
             }
 
@@ -491,7 +467,7 @@ class SettingsDialog(QDialog):
 
         self.prob_labels = {}
         for key, name in [('ais', 'P_drop(AIS)'), ('radar', 'P_drop(Radar)'),
-                          ('arpa', 'P_drop(ARPA)'), ('camera', 'P_drop(CAMERA)')]:
+                          ('camera', 'P_drop(CAMERA)')]:
             label = QLabel("0.0%")
             label.setMinimumWidth(80)
             prob_layout.addRow(f"{name}:", label)
@@ -540,43 +516,27 @@ class SettingsDialog(QDialog):
         현재 UI 값으로 수신 모델 설정 객체를 생성합니다.
 
         매개변수:
-            tab_type: 신호 타입 ('ais', 'radar', 'arpa', 'camera')
+            tab_type: 신호 타입 ('ais', 'radar', 'camera')
 
         반환값:
-            ReceptionModelConfig 또는 ARPATrackConfig: 생성된 설정 객체
+            ReceptionModelConfig: 생성된 설정 객체
         """
         widgets = self.reception_widgets.get(tab_type, {})
         if not widgets:
             return None
 
-        if tab_type == 'arpa':
-            config = ARPATrackConfig(
-                d0=widgets['d0'].value(),
-                d1=widgets['d1'].value(),
-                p0=widgets['p0'].value(),
-                p1=widgets['p1'].value(),
-                full_block_at_d1=widgets['full_block'].isChecked(),
-                curve_type=widgets['curve'].currentText(),
-                burst_enabled=widgets['burst_enabled'].isChecked(),
-                burst_min_sec=widgets['burst_min'].value(),
-                burst_max_sec=widgets['burst_max'].value(),
-                burst_trigger_mult=widgets['burst_mult'].value(),
-                coast_time_sec=widgets['coast'].value() if widgets['coast'] else 5.0,
-                reacquire_prob=widgets['reacquire'].value() if widgets['reacquire'] else 0.8
-            )
-        else:
-            config = ReceptionModelConfig(
-                d0=widgets['d0'].value(),
-                d1=widgets['d1'].value(),
-                p0=widgets['p0'].value(),
-                p1=widgets['p1'].value(),
-                full_block_at_d1=widgets['full_block'].isChecked(),
-                curve_type=widgets['curve'].currentText(),
-                burst_enabled=widgets['burst_enabled'].isChecked(),
-                burst_min_sec=widgets['burst_min'].value(),
-                burst_max_sec=widgets['burst_max'].value(),
-                burst_trigger_mult=widgets['burst_mult'].value()
-            )
+        config = ReceptionModelConfig(
+            d0=widgets['d0'].value(),
+            d1=widgets['d1'].value(),
+            p0=widgets['p0'].value(),
+            p1=widgets['p1'].value(),
+            full_block_at_d1=widgets['full_block'].isChecked(),
+            curve_type=widgets['curve'].currentText(),
+            burst_enabled=widgets['burst_enabled'].isChecked(),
+            burst_min_sec=widgets['burst_min'].value(),
+            burst_max_sec=widgets['burst_max'].value(),
+            burst_trigger_mult=widgets['burst_mult'].value()
+        )
         return config
 
     def _update_preview(self):
@@ -591,7 +551,7 @@ class SettingsDialog(QDialog):
 
         distances = np.linspace(0, 60, 200)
 
-        for tab_type in ['ais', 'radar', 'arpa', 'camera']:
+        for tab_type in ['ais', 'radar', 'camera']:
             config = self._get_current_config(tab_type)
             if config:
                 probs = [self._calculate_dropout_prob(d, config) * 100 for d in distances]
@@ -599,7 +559,7 @@ class SettingsDialog(QDialog):
 
         # 현재 거리에서의 확률 업데이트
         current_dist = self.preview_slider.value()
-        for tab_type in ['ais', 'radar', 'arpa', 'camera']:
+        for tab_type in ['ais', 'radar', 'camera']:
             config = self._get_current_config(tab_type)
             if config:
                 prob = self._calculate_dropout_prob(current_dist, config) * 100
@@ -665,10 +625,6 @@ class SettingsDialog(QDialog):
         if 'radar_detect' in preset and 'radar' in self.reception_widgets:
             self._apply_preset_to_tab('radar', preset['radar_detect'])
 
-        # ARPA
-        if 'arpa_track' in preset and 'arpa' in self.reception_widgets:
-            self._apply_preset_to_tab('arpa', preset['arpa_track'])
-
         # Camera
         if 'camera' in preset and 'camera' in self.reception_widgets:
             self._apply_preset_to_tab('camera', preset['camera'])
@@ -680,7 +636,7 @@ class SettingsDialog(QDialog):
         프리셋 데이터를 특정 탭에 적용합니다.
 
         매개변수:
-            tab_type: 신호 타입 ('ais', 'radar', 'arpa', 'camera')
+            tab_type: 신호 타입 ('ais', 'radar', 'camera')
             preset_data: 프리셋 설정 딕셔너리
         """
         widgets = self.reception_widgets.get(tab_type, {})
@@ -695,10 +651,6 @@ class SettingsDialog(QDialog):
             widgets['p0'].setValue(preset_data['p0'])
         if 'p1' in preset_data:
             widgets['p1'].setValue(preset_data['p1'])
-        if 'coast_time_sec' in preset_data and widgets.get('coast'):
-            widgets['coast'].setValue(preset_data['coast_time_sec'])
-        if 'reacquire_prob' in preset_data and widgets.get('reacquire'):
-            widgets['reacquire'].setValue(preset_data['reacquire_prob'])
 
     def init_object(self):
         """
@@ -1047,11 +999,6 @@ class SettingsDialog(QDialog):
         radar_config = self._get_current_config('radar')
         if radar_config:
             current_project.settings.radar_detect = radar_config
-
-        # ARPA track config
-        arpa_config = self._get_current_config('arpa')
-        if arpa_config:
-            current_project.settings.arpa_track = arpa_config
 
         # Camera reception config
         camera_config = self._get_current_config('camera')

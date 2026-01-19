@@ -1203,8 +1203,6 @@ class SimulationWorker(QObject):
             config = self.proj.settings.ais_reception
         elif stype == "RATTM":
             config = self.proj.settings.radar_detect
-        elif stype == "ARPA":
-            config = self.proj.settings.arpa_track
         elif stype == "Camera":
             config = self.proj.settings.camera_reception
         else:
@@ -1288,7 +1286,7 @@ class SimulationWorker(QObject):
 
     def try_emit(self, raw, stype, ts_obj, ship_idx):
         """
-        NMEA 신호 발신을 시도합니다 (고정 확률 드롭아웃).
+        NMEA 신호를 발신합니다 (고정 확률 드롭아웃).
 
         매개변수:
             raw: NMEA 메시지 문자열
@@ -1360,9 +1358,12 @@ class SimulationWorker(QObject):
         """
         AIS 메시지를 생성합니다 (멀티 프래그먼트 지원).
 
+        AIVDM Message Type 1 (Class A Position Report)을 생성합니다.
+        실제 선박 상태 정보(위치, 속도, 방향)를 인코딩합니다.
+
         매개변수:
             base: 기본 행 데이터
-            state: 상태 딕셔너리
+            state: 상태 딕셔너리 (lat_deg, lon_deg, sog_knots, cog_true_deg, heading_true_deg 포함)
             stype: AIS 타입 (VDM 등)
             mmsi: MMSI 번호
 
@@ -1377,7 +1378,29 @@ class SimulationWorker(QObject):
             normalized_probs = [p / total_prob for p in probs]
             total_fragments = random.choices(range(1, 6), weights=normalized_probs, k=1)[0]
 
-        payload = encode_ais_payload(mmsi)
+        # 실제 선박 상태 정보를 사용하여 AIS 페이로드 인코딩
+        # state 딕셔너리에서 필요한 값 추출
+        lat_deg = state.get('lat_deg', 0.0)
+        lon_deg = state.get('lon_deg', 0.0)
+        sog_knots = state.get('sog_knots', 0.0)
+        cog_deg = state.get('cog_true_deg', 0.0)
+        heading_deg = state.get('heading_true_deg', 0.0)
+
+        # 타임스탬프에서 UTC 초 추출
+        rx_time = base.get('rx_time')
+        utc_second = rx_time.second if rx_time else None
+
+        payload = encode_ais_payload(
+            mmsi=mmsi,
+            lat_deg=lat_deg,
+            lon_deg=lon_deg,
+            sog_knots=sog_knots,
+            cog_deg=cog_deg,
+            heading_deg=heading_deg,
+            nav_status=0,  # 0 = 항해 중 (엔진 사용)
+            rot=0,         # 0 = 선회 안함
+            utc_second=utc_second
+        )
         fragment_min_len = 1
         fragment_length = max(fragment_min_len, math.ceil(len(payload) / total_fragments))
 

@@ -5,7 +5,6 @@
 
 클래스:
     ReceptionModelConfig: 신호 수신 모델 설정
-    ARPATrackConfig: ARPA 추적 전용 설정
     ProjectSettings: 프로젝트 전체 설정
 
 수신 모델 프리셋:
@@ -60,22 +59,6 @@ class ReceptionModelConfig:
     burst_trigger_mult: float = 2.0  # 버스트 발생 확률 배수
 
 
-@dataclass
-class ARPATrackConfig(ReceptionModelConfig):
-    """
-    ARPA 추적 전용 설정을 정의하는 데이터 클래스입니다.
-
-    ReceptionModelConfig를 상속하며 ARPA 특유의
-    트랙 유지 및 재획득 설정을 추가합니다.
-
-    속성:
-        coast_time_sec: 신호 유실 후 트랙 유지 시간 (초)
-        reacquire_prob: 트랙 재획득 확률 (0~1)
-    """
-    coast_time_sec: float = 5.0  # 트랙 유지 시간 (코스팅)
-    reacquire_prob: float = 0.8  # 재획득 확률
-
-
 # 수신 모델 프리셋 정의
 # 다양한 통신 환경을 사전 정의된 값으로 빠르게 설정할 수 있습니다.
 RECEPTION_PRESETS = {
@@ -83,21 +66,18 @@ RECEPTION_PRESETS = {
     "realistic": {
         "ais": {"d0": 40, "d1": 50, "p0": 0.01, "p1": 0.95},
         "radar_detect": {"d0": 6, "d1": 24, "p0": 0.02, "p1": 0.80},
-        "arpa_track": {"d0": 8, "d1": 18, "p0": 0.05, "p1": 0.90, "coast_time_sec": 5.0, "reacquire_prob": 0.8},
         "camera": {"d0": 1, "d1": 5, "p0": 0.01, "p1": 0.90}
     },
     # 안정적인 환경 (테스트용)
     "stable": {
         "ais": {"d0": 40, "d1": 80, "p0": 0.01, "p1": 0.30},
         "radar_detect": {"d0": 6, "d1": 48, "p0": 0.02, "p1": 0.30},
-        "arpa_track": {"d0": 8, "d1": 36, "p0": 0.05, "p1": 0.40, "coast_time_sec": 10.0, "reacquire_prob": 0.9},
         "camera": {"d0": 2, "d1": 8, "p0": 0.01, "p1": 0.30}
     },
     # 열악한 환경 (스트레스 테스트)
     "harsh": {
         "ais": {"d0": 20, "d1": 30, "p0": 0.05, "p1": 0.99},
         "radar_detect": {"d0": 4, "d1": 12, "p0": 0.10, "p1": 0.95},
-        "arpa_track": {"d0": 6, "d1": 10, "p0": 0.10, "p1": 0.99, "coast_time_sec": 2.0, "reacquire_prob": 0.5},
         "camera": {"d0": 0.5, "d1": 2, "p0": 0.10, "p1": 0.99}
     }
 }
@@ -134,7 +114,6 @@ class ProjectSettings:
         reception_preset: 수신 모델 프리셋
         ais_reception: AIS 수신 설정
         radar_detect: 레이더 탐지 설정
-        arpa_track: ARPA 추적 설정
         camera_reception: 카메라 수신 설정
     """
     # UI 표시 색상 설정
@@ -184,9 +163,6 @@ class ProjectSettings:
     ))
     radar_detect: ReceptionModelConfig = field(default_factory=lambda: ReceptionModelConfig(
         d0=6.0, d1=24.0, p0=0.02, p1=0.80
-    ))
-    arpa_track: ARPATrackConfig = field(default_factory=lambda: ARPATrackConfig(
-        d0=8.0, d1=18.0, p0=0.05, p1=0.90, coast_time_sec=5.0, reacquire_prob=0.8
     ))
     camera_reception: ReceptionModelConfig = field(default_factory=lambda: ReceptionModelConfig(
         d0=1.0, d1=5.0, p0=0.01, p1=0.90
