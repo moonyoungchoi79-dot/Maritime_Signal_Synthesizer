@@ -1,3 +1,23 @@
+"""
+메인 윈도우 모듈
+
+이 모듈은 Maritime Signal Synthesizer 애플리케이션의 메인 윈도우를 제공합니다.
+선박 경로 편집, 이벤트 관리, 시나리오 설정, 시뮬레이션 제어 등의 핵심 기능을 포함합니다.
+
+클래스:
+    AddShipDialog: 새 선박 추가 다이얼로그
+    ColoredTabBar: 테마 인식 탭바 위젯
+    MainWindow: 애플리케이션 메인 윈도우
+
+주요 기능:
+    - 프로젝트 생성/열기/저장
+    - 선박 및 영역 객체 관리
+    - 경로 포인트 추가/이동/삭제
+    - 지도 뷰에서 시각적 편집
+    - Path/Event/Scenario/Simulation 탭 전환
+    - 테마 설정 (Light/Dark/System)
+"""
+
 import sys
 import os
 import math
@@ -50,12 +70,35 @@ from app.ui.panels.scenario_panel import ScenarioPanel
 from app.ui.widgets import message_box as msg
 import app.core.state as app_state
 
+
 class AddShipDialog(QDialog):
-    """Dialog for adding a new ship with class and dimensions."""
+    """
+    새 선박을 추가하기 위한 다이얼로그입니다.
+
+    선박 이름, 클래스(종류), 제원(길이, 폭, 흘수, 공기흘수)을 입력받습니다.
+    선박 클래스 선택 시 해당 클래스의 기본 제원이 자동으로 설정됩니다.
+
+    속성:
+        SHIP_CLASSES: 지원하는 선박 클래스 목록
+        ship_dimensions: 클래스별 기본 제원 딕셔너리
+        name_edit: 선박 이름 입력 필드
+        class_combo: 선박 클래스 선택 콤보박스
+        length_spin: 길이 입력 스핀박스
+        beam_spin: 폭 입력 스핀박스
+        draft_spin: 흘수 입력 스핀박스
+        air_draft_spin: 공기흘수 입력 스핀박스
+    """
 
     SHIP_CLASSES = ["CONTAINER", "TANKER", "CARGO", "PASSENGER", "FISHING", "BUOY", "OTHER"]
 
     def __init__(self, parent=None, default_name="Ship-0"):
+        """
+        AddShipDialog를 초기화합니다.
+
+        매개변수:
+            parent: 부모 위젯
+            default_name: 기본 선박 이름
+        """
         super().__init__(parent)
         from app.core.models.ship import SHIP_CLASS_DIMENSIONS
 
@@ -65,7 +108,7 @@ class AddShipDialog(QDialog):
 
         layout = QVBoxLayout(self)
 
-        # Ship basic info
+        # 선박 기본 정보 그룹
         basic_group = QGroupBox("Basic Information")
         basic_layout = QFormLayout(basic_group)
 
@@ -80,7 +123,7 @@ class AddShipDialog(QDialog):
 
         layout.addWidget(basic_group)
 
-        # Ship dimensions
+        # 선박 제원 그룹
         dim_group = QGroupBox("Dimensions (meters)")
         dim_layout = QFormLayout(dim_group)
 
@@ -114,7 +157,7 @@ class AddShipDialog(QDialog):
 
         layout.addWidget(dim_group)
 
-        # Buttons
+        # 버튼
         btn_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -123,7 +166,12 @@ class AddShipDialog(QDialog):
         layout.addWidget(btn_box)
 
     def _on_class_changed(self, ship_class: str):
-        """Update dimension spinboxes when ship class changes."""
+        """
+        선박 클래스가 변경될 때 제원 스핀박스를 업데이트합니다.
+
+        매개변수:
+            ship_class: 선택된 선박 클래스
+        """
         dims = self.ship_dimensions.get(ship_class, self.ship_dimensions["OTHER"])
         self.length_spin.setValue(dims[0])
         self.beam_spin.setValue(dims[1])
@@ -131,7 +179,12 @@ class AddShipDialog(QDialog):
         self.air_draft_spin.setValue(dims[3])
 
     def get_data(self):
-        """Return the ship data entered by user."""
+        """
+        사용자가 입력한 선박 데이터를 반환합니다.
+
+        반환값:
+            선박 데이터 딕셔너리 (name, ship_class, length_m, beam_m, draft_m, air_draft_m)
+        """
         return {
             "name": self.name_edit.text().strip() or "Unnamed",
             "ship_class": self.class_combo.currentText(),
@@ -143,9 +196,29 @@ class AddShipDialog(QDialog):
 
 
 class ColoredTabBar(QTabBar):
+    """
+    테마에 따라 색상이 변경되는 커스텀 탭바입니다.
+
+    프로젝트 설정의 테마 모드(Light/Dark/System)에 따라
+    탭의 배경색과 텍스트 색상이 자동으로 조정됩니다.
+    빈 탭(스페이서)은 남은 공간을 채우도록 크기가 조정됩니다.
+    """
+
     def tabSizeHint(self, index):
+        """
+        탭의 크기 힌트를 반환합니다.
+
+        빈 텍스트의 탭은 남은 공간을 모두 차지하도록 크기가 계산됩니다.
+
+        매개변수:
+            index: 탭 인덱스
+
+        반환값:
+            탭 크기 (QSize)
+        """
         size = super().tabSizeHint(index)
         if self.tabText(index) == "":
+            # 스페이서 탭: 남은 공간 계산
             total_width = self.width()
             used_width = 0
             for i in range(self.count()):
@@ -157,82 +230,133 @@ class ColoredTabBar(QTabBar):
         return size
 
     def resizeEvent(self, event):
+        """
+        리사이즈 이벤트 핸들러입니다.
+
+        탭바 크기가 변경될 때 지오메트리를 업데이트합니다.
+
+        매개변수:
+            event: 리사이즈 이벤트 객체
+        """
         super().resizeEvent(event)
         self.updateGeometry()
 
     def paintEvent(self, event):
+        """
+        탭바를 그리는 이벤트 핸들러입니다.
+
+        테마 설정에 따라 적절한 배경색과 텍스트 색상으로 탭을 렌더링합니다.
+
+        매개변수:
+            event: 페인트 이벤트 객체
+        """
         painter = QPainter(self)
         option = QStyleOptionTab()
 
+        # 테마 모드 확인
         s = current_project.settings
         mode = s.theme_mode
         is_dark = False
         if mode == "Dark": is_dark = True
         elif mode == "Light": is_dark = False
-        else: # System
+        else:  # System - 시스템 설정 따름
             if QApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark: is_dark = True  # type: ignore
 
+        # 테마에 따른 색상 설정
         bg_color = QColor(Qt.GlobalColor.black) if is_dark else QColor(Qt.GlobalColor.white)
         text_color = QColor(Qt.GlobalColor.white) if is_dark else QColor(Qt.GlobalColor.black)
 
+        # 각 탭 그리기
         for i in range(self.count()):
-            if self.tabText(i) == "": continue
-            
+            if self.tabText(i) == "": continue  # 스페이서 탭 건너뜀
+
             self.initStyleOption(option, i)
-            
-            # Draw background
+
+            # 배경 그리기
             painter.fillRect(option.rect, bg_color)
-            
-            # Draw Text
+
+            # 텍스트 그리기
             painter.setPen(text_color)
             font = painter.font()
             painter.setFont(font)
             painter.drawText(option.rect, Qt.AlignmentFlag.AlignCenter, self.tabText(i))
-            
-            # Draw Separator
+
+            # 구분선 그리기
             if i < self.count() - 1 and self.tabText(i+1) != "":
                 painter.setPen(QPen(QColor(200, 200, 200), 1))
                 painter.drawLine(option.rect.topRight() + QPoint(0, 5), option.rect.bottomRight() - QPoint(0, 5))
-            
-            # Draw Icon if exists (Simple centered-left drawing)
+
+            # 아이콘이 있으면 그리기
             if not self.tabIcon(i).isNull():
                 self.tabIcon(i).paint(painter, option.rect.adjusted(5, 0, -5, 0), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
+
 class MainWindow(QMainWindow):
+    """
+    애플리케이션의 메인 윈도우입니다.
+
+    프로젝트 관리, 선박/영역 편집, 이벤트 설정, 시나리오 구성,
+    시뮬레이션 제어 등 모든 핵심 기능을 제공합니다.
+
+    시그널:
+        data_changed: 데이터가 변경되었을 때 발생
+
+    속성:
+        sim_panel: 시뮬레이션 패널
+        event_panel: 이벤트 스크립트 패널
+        scenario_panel: 시나리오 패널
+        tabs: 메인 탭 위젯
+        view: 지도 뷰
+        scene: 그래픽스 씬
+        obj_combo: 객체 선택 콤보박스
+        data_table: 데이터 테이블
+    """
+
     data_changed = pyqtSignal()
 
     def __init__(self):
+        """메인 윈도우를 초기화합니다."""
         super().__init__()
         self.setWindowTitle(APP_NAME)
         self.resize(*DEFAULT_WINDOW_SIZE)
         self.apply_theme()
         self.update_stylesheets()
-        
+
+        # 패널 생성
         self.sim_panel = SimulationPanel(self)
         self.event_panel = EventScriptPanel(self)
         self.scenario_panel = ScenarioPanel(self)
         self.scenario_panel.data_changed.connect(self.on_data_changed)
-        
+
+        # UI 초기화
         self.init_ui()
         self.update_ui_state(False)
         self.update_info_strip()
-        
+
+        # 시그널 연결
         self.data_changed.connect(self.on_data_changed)
-        
-        # Initialize tab state
+
+        # 탭 상태 초기화
         self.update_sim_tab_state("STOP")
 
     def apply_theme(self):
+        """
+        현재 테마 설정을 애플리케이션에 적용합니다.
+
+        테마 모드(Light/Dark/System)에 따라 전체 애플리케이션의
+        팔레트 색상을 설정합니다.
+        """
         mode = current_project.settings.theme_mode
         is_dark = False
         if mode == "Dark": is_dark = True
         elif mode == "Light": is_dark = False
-        else: # System
+        else:  # System - 시스템 설정 따름
             if QApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark: is_dark = True  # type: ignore
 
         p = QApplication.palette()
-        
+
         if is_dark:
+            # 다크 테마 팔레트 설정
             p.setColor(QPalette.ColorRole.Window, QColor(53, 53, 53))
             p.setColor(QPalette.ColorRole.WindowText, Qt.GlobalColor.white)
             p.setColor(QPalette.ColorRole.Base, QColor(25, 25, 25))
@@ -247,6 +371,7 @@ class MainWindow(QMainWindow):
             p.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218))
             p.setColor(QPalette.ColorRole.HighlightedText, Qt.GlobalColor.black)
         else:
+            # 라이트 테마 팔레트 설정
             p.setColor(QPalette.ColorRole.Window, Qt.GlobalColor.white)
             p.setColor(QPalette.ColorRole.WindowText, Qt.GlobalColor.black)
             p.setColor(QPalette.ColorRole.Base, Qt.GlobalColor.white)
@@ -259,30 +384,37 @@ class MainWindow(QMainWindow):
             p.setColor(QPalette.ColorRole.BrightText, Qt.GlobalColor.red)
             p.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218))
             p.setColor(QPalette.ColorRole.HighlightedText, Qt.GlobalColor.white)
-            
+
         QApplication.setPalette(p)
 
     def update_stylesheets(self):
+        """
+        현재 테마에 맞게 스타일시트를 업데이트합니다.
+
+        위젯별 세부 스타일(배경색, 텍스트 색상, 테두리 등)을 설정합니다.
+        """
         s = current_project.settings
         mode = s.theme_mode
         is_dark = False
         if mode == "Dark": is_dark = True
         elif mode == "Light": is_dark = False
-        else: # System
+        else:  # System
             if QApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark: is_dark = True  # type: ignore
 
+        # 테마에 따른 색상 정의
         bg_color = "#353535" if is_dark else "#ffffff"
         text_color = "#ffffff" if is_dark else "black"
         input_bg = "#252525" if is_dark else "#ffffff"
         btn_bg = "#454545" if is_dark else "#e0e0e0"
         border_color = "#ffffff" if is_dark else "#000000"
         toolbar_bg = "#2d2d2d" if is_dark else "#f0f0f0"
-        
-        # Disabled state colors
+
+        # 비활성화 상태 색상
         disabled_bg = "#2a2a2a" if is_dark else "#f5f5f5"
         disabled_text = "#555555" if is_dark else "#a0a0a0"
         disabled_border = "#333333" if is_dark else "#d0d0d0"
-        
+
+        # 전체 스타일시트 적용
         self.setStyleSheet(f"""
             QWidget {{ color: {text_color} !important; }}
             QMainWindow, QDialog, QTableWidget, QTextEdit, QListWidget, QGraphicsView {{ background-color: {bg_color}; }}
@@ -293,23 +425,23 @@ class MainWindow(QMainWindow):
             QMenu::item:selected {{ background-color: #2a82da; color: white; }}
             QToolBar {{ background-color: {toolbar_bg}; border: 1px solid {border_color}; border-bottom: none; }}
             QToolBar QLabel {{ padding: 0 5px; color: {text_color}; }}
-            QLineEdit, QSpinBox, QDoubleSpinBox {{ 
-                background-color: {input_bg}; 
-                color: {text_color}; 
-                border: 1px solid {border_color}; 
-                padding: 2px; 
+            QLineEdit, QSpinBox, QDoubleSpinBox {{
+                background-color: {input_bg};
+                color: {text_color};
+                border: 1px solid {border_color};
+                padding: 2px;
                 border-radius: 2px;
             }}
             QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
                 border: 2px solid {s.select_color};
                 padding: 1px;
             }}
-            
-            QPushButton {{ 
-                background-color: {btn_bg}; 
-                color: {text_color}; 
-                border: 1px solid {border_color}; 
-                padding: 4px; 
+
+            QPushButton {{
+                background-color: {btn_bg};
+                color: {text_color};
+                border: 1px solid {border_color};
+                padding: 4px;
                 border-radius: 4px;
             }}
             QPushButton:hover {{
@@ -318,10 +450,10 @@ class MainWindow(QMainWindow):
                 padding: 3px;
             }}
             QPushButton:pressed {{ background-color: {s.select_color}; color: white; }}
-            QPushButton:disabled {{ 
-                background-color: {disabled_bg}; 
-                color: {disabled_text}; 
-                border: 1px solid {disabled_border}; 
+            QPushButton:disabled {{
+                background-color: {disabled_bg};
+                color: {disabled_text};
+                border: 1px solid {disabled_border};
             }}
 
             QHeaderView::section {{ background-color: {btn_bg}; color: {text_color}; }}
@@ -354,23 +486,30 @@ class MainWindow(QMainWindow):
             QPushButton#rtgBtn:hover {{ opacity: 0.8; }}
             QPushButton#rtgBtn:disabled {{ background-color: {disabled_bg}; color: {disabled_text}; border: 1px solid {disabled_border}; }}
             QLabel#boldLbl {{ }}
-            
+
             QTabWidget::pane {{ border: 1px solid {border_color}; }}
 
             QMessageBox {{ min-height: 30px; }}
             QMessageBox QLabel {{ min-height: 35px; }}
         """)
-        
+
+        # 좌표 라벨 스타일 업데이트
         if hasattr(self, 'lbl_coords'):
             self.lbl_coords.setStyleSheet(f"padding: 2px 5px; color: {text_color};")
 
     def init_ui(self):
+        """
+        UI 컴포넌트를 초기화하고 배치합니다.
+
+        상단 툴바, 정보 패널, 메인 탭 위젯, 좌표 표시 라벨 등을 생성합니다.
+        """
         central = QWidget()
         self.setCentralWidget(central)
         main_v = QVBoxLayout(central)
-        main_v.setContentsMargins(0,0,0,0)
+        main_v.setContentsMargins(0, 0, 0, 0)
         main_v.setSpacing(0)
-        
+
+        # 상단 툴바 설정
         top_tb = QToolBar()
         top_tb.setStyleSheet("""
             QToolBar {
@@ -379,14 +518,15 @@ class MainWindow(QMainWindow):
                 spacing: 3px;
             }
             QToolBar::separator {
-                background-color: #808080;  
-                width: 2px;                 
-                margin-top: 4px;            
-                margin-bottom: 4px;         
+                background-color: #808080;
+                width: 2px;
+                margin-top: 4px;
+                margin-bottom: 4px;
             }
         """)
         main_v.addWidget(top_tb)
 
+        # 파일 메뉴 액션
         top_tb.addWidget(QLabel(" File: "))
         top_tb.addAction("New Project", self.new_project)
         top_tb.addAction("Open Project", self.open_project)
@@ -395,47 +535,50 @@ class MainWindow(QMainWindow):
         top_tb.addAction("Exit", self.close)
         top_tb.addSeparator()
 
+        # 도구 메뉴 액션
         top_tb.addWidget(QLabel(" Tools: "))
-        
         top_tb.addAction("User Guide", self.open_user_guide)
         top_tb.addAction("Settings", self.open_settings)
         top_tb.addSeparator()
-        
+
+        # 프로젝트 정보 패널
         self.info_panel = QFrame()
         self.info_panel.setFrameShape(QFrame.Shape.StyledPanel)
         self.info_panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         h_info = QHBoxLayout(self.info_panel)
         h_info.setContentsMargins(5, 2, 5, 2)
-        
+
         lbl_t = QLabel("Title:"); lbl_t.setObjectName("boldLbl")
         self.lbl_proj_name = QLabel("-")
         lbl_s = QLabel("Start:"); lbl_s.setObjectName("boldLbl")
         self.lbl_proj_time = QLabel("-")
-        
+
         h_info.addWidget(lbl_t); h_info.addWidget(self.lbl_proj_name)
         h_info.addWidget(lbl_s); h_info.addWidget(self.lbl_proj_time)
         h_info.addStretch()
         main_v.addWidget(self.info_panel)
-        
-        # --- Tabs Setup ---
+
+        # 탭 위젯 설정
         self.tabs = QTabWidget()
         self.tabs.setTabPosition(QTabWidget.TabPosition.South)
         self.tabs.setTabBar(ColoredTabBar(self.tabs))
         self.tabs.setDocumentMode(True)
         self.tabs.tabBar().setExpanding(False)  # type: ignore
-        
-        # Map Editor Tab
+
+        # 맵 에디터 탭 (Path 탭)
         self.map_editor_widget = QWidget()
         main_h = QHBoxLayout(self.map_editor_widget)
-        main_h.setContentsMargins(5,5,5,5)
-        main_h.setSpacing(15) 
-        
+        main_h.setContentsMargins(5, 5, 5, 5)
+        main_h.setSpacing(15)
+
+        # 좌측 영역 (지도 뷰)
         left_widget = QWidget()
         left_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         left_v = QVBoxLayout(left_widget)
-        left_v.setContentsMargins(0,0,0,0)
+        left_v.setContentsMargins(0, 0, 0, 0)
         left_v.setSpacing(2)
-        
+
+        # 편집 툴바
         tb = QToolBar()
         tb.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         tb.setStyleSheet("""
@@ -445,26 +588,29 @@ class MainWindow(QMainWindow):
                 spacing: 3px;
             }
             QToolBar::separator {
-                background-color: #808080;  
-                width: 2px;                 
-                margin-top: 4px;            
-                margin-bottom: 4px;         
+                background-color: #808080;
+                width: 2px;
+                margin-top: 4px;
+                margin-bottom: 4px;
             }
         """)
         left_v.addWidget(tb)
-        
+
+        # 초기화/선택 액션
         tb.addWidget(QLabel("Initialize: "))
         a_sel = tb.addAction("Select")
         a_sel.triggered.connect(lambda: self.set_map_mode("SELECT"))  # type: ignore
         tb.addSeparator()
-        
+
+        # 객체 관리 액션
         tb.addWidget(QLabel("Object:"))
         tb.addAction("Add Ship", self.add_ship_dialog)
         tb.addAction("Add Area", self.add_area_dialog)
         tb.addAction("Change Area Color", self.change_area_color)
         tb.addAction("Delete Selected", self.delete_object)
         tb.addSeparator()
-        
+
+        # 포인트 관리 액션
         tb.addWidget(QLabel("Point:"))
         tb.addAction("Add", self.req_add_point)
         tb.addAction("Move", lambda: self.set_map_mode("MOVE_POINT"))
@@ -473,18 +619,20 @@ class MainWindow(QMainWindow):
         a_del_chk = tb.addAction("Delete Checked")
         a_del_chk.triggered.connect(self.delete_checked_points)  # type: ignore
         a_del_chk.setToolTip("Delete all points checked in the table")  # type: ignore
-        
+
+        # 그래픽스 씬 및 뷰
         self.scene = QGraphicsScene()
         self.view = MapView(self.scene, self)
         self.view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        left_v.addWidget(self.view, 1)  # stretch factor 1 to take all available space
+        left_v.addWidget(self.view, 1)
 
         main_h.addWidget(left_widget, 3)
-        
+
+        # 우측 영역 (객체 선택 및 데이터 테이블)
         right_widget = QWidget()
         right_v = QVBoxLayout(right_widget)
-        right_v.setContentsMargins(0,0,0,0)
-        
+        right_v.setContentsMargins(0, 0, 0, 0)
+
         lbl_obj = QLabel("Select Object"); lbl_obj.setObjectName("boldLbl")
         right_v.addWidget(lbl_obj)
         self.obj_combo = QComboBox()
@@ -496,107 +644,136 @@ class MainWindow(QMainWindow):
         h = self.data_table.horizontalHeader()
         h.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)  # type: ignore
         right_v.addWidget(self.data_table)
-        
-        
+
         main_h.addWidget(right_widget, 1)
-        
+
+        # 탭 추가
         self.tabs.addTab(self.map_editor_widget, "Path")
         self.tabs.addTab(self.event_panel, "Event")
         self.tabs.addTab(self.scenario_panel, "Scenario")
-        
-        # Spacer
+
+        # 스페이서 탭 (빈 공간 채우기용)
         self.spacer_widget = QWidget()
-        self.tabs.addTab(self.spacer_widget, "") 
+        self.tabs.addTab(self.spacer_widget, "")
         self.tabs.setTabEnabled(3, False)
-        
+
+        # 시뮬레이션 탭
         self.tabs.addTab(self.sim_panel, "Simulation")
-        
+
         main_v.addWidget(self.tabs)
-        
+
+        # 시그널 연결
         self.tabs.currentChanged.connect(self.on_tab_changed)
         self.sim_panel.state_changed.connect(self.update_sim_tab_state)
-        
+
+        # 좌표 표시 라벨
         self.lbl_coords = QLabel("Lat: 0.00000 Lon: 0.00000")
         self.lbl_coords.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.lbl_coords.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.lbl_coords.setMinimumHeight(25)
-        left_v.addWidget(self.lbl_coords, 0)  # stretch factor 0 to keep fixed size
-        
+        left_v.addWidget(self.lbl_coords, 0)
+
         self.view.coord_changed.connect(self.update_status)
         self.update_stylesheets()
 
-        
     def set_map_mode(self, mode):
+        """
+        지도 편집 모드를 설정합니다.
+
+        매개변수:
+            mode: 모드 문자열 ("SELECT", "ADD_POINT", "MOVE_POINT", "DELETE_POINT", "ADD_AREA")
+        """
         self.view.mode = mode
         self.view.update_cursor()
-        # self.status.showMessage(f"Mode: {mode}")
         self.redraw_map()
 
     def update_status(self, px, py):
+        """
+        마우스 위치의 좌표를 상태 라벨에 업데이트합니다.
+
+        매개변수:
+            px: 픽셀 X 좌표
+            py: 픽셀 Y 좌표
+        """
         mi = current_project.map_info
         _, _, lat, lon = pixel_to_coords(px, py, mi)
         norm_lon = normalize_lon(lon)
         self.lbl_coords.setText(f"Lat: {lat:.5f} Lon: {norm_lon:.5f}")
 
     def update_info_strip(self):
+        """프로젝트 정보 패널을 업데이트합니다."""
         p = current_project
         self.lbl_proj_name.setText(p.project_name)
         self.lbl_proj_time.setText(p.start_time.strftime('%Y-%m-%d %H:%M:%S'))
 
     def update_obj_combo(self):
+        """
+        객체 선택 콤보박스를 업데이트합니다.
+
+        선박과 영역 목록을 정렬하여 콤보박스에 추가합니다.
+        자선(OwnShip)이 먼저 표시되고, 수동 타겟, 영역 순으로 표시됩니다.
+        랜덤 생성 선박(ID >= 1000)은 Path 탭에서 제외됩니다.
+        """
         self.obj_combo.blockSignals(True)
         self.obj_combo.clear()
-        
-        # Sorting Rules:
-        # 1) Own Ship (Index 0 or settings.own_ship_idx)
-        # 2) Manual Targets (idx < 1000)
-        # 3) Random Targets (idx >= 1000) -> [수정] Path 탭에서는 제외함
-        
+
+        # 정렬 규칙:
+        # 1) 자선 (OwnShip)
+        # 2) 수동 타겟 (idx < 1000)
+        # 3) 랜덤 타겟 (idx >= 1000) -> Path 탭에서는 제외
+
         own_idx = current_project.settings.own_ship_idx
         own_ship = None
         manual_targets = []
-        # random_targets = [] # [수정] 제거
-        
+
         for s in current_project.ships:
             if s.idx == own_idx: own_ship = s
-            elif s.idx >= 1000: continue # [수정] 랜덤 타겟은 콤보박스에 추가하지 않음
+            elif s.idx >= 1000: continue  # 랜덤 타겟은 콤보박스에 추가하지 않음
             else: manual_targets.append(s)
-            
+
         manual_targets.sort(key=lambda x: x.idx)
-        # random_targets.sort(key=lambda x: x.idx) # [수정] 제거
-        
-        # [수정] sorted_ships 구성에서 random_targets 제거
+
+        # 정렬된 선박 목록 구성
         sorted_ships = ([own_ship] if own_ship else []) + manual_targets
-        
+
         for s in sorted_ships:
             tag = "OwnShip" if s.idx == own_idx else f"Target{s.idx}"
             self.obj_combo.addItem(f"[Ship] {s.name} (MMSI: {s.mmsi}) ({tag})", s.idx)
-            
+
         for st in current_project.areas:
             self.obj_combo.addItem(f"[Area] {st.name}", st.id)
-            
+
         self.obj_combo.blockSignals(False)
         self.on_obj_selected()
 
     def on_obj_selected(self):
+        """
+        객체가 선택되었을 때 호출됩니다.
+
+        선택된 객체에 따라 데이터 테이블을 업데이트하고 지도를 다시 그립니다.
+        """
         idx = self.obj_combo.currentIndex()
         if idx < 0:
             self.data_table.setRowCount(0)
             return
-            
+
         txt = self.obj_combo.currentText()
         if "[Ship]" in txt:
             sid = self.obj_combo.currentData()
-            # self.btn_spd.setEnabled(True)
             self.show_ship_table(sid)
         elif "[Area]" in txt:
             sid = self.obj_combo.currentData()
-            # self.btn_spd.setEnabled(False)
             self.show_struct_table(sid)
 
         self.redraw_map()
 
     def show_ship_table(self, idx):
+        """
+        선박의 경로 포인트 데이터를 테이블에 표시합니다.
+
+        매개변수:
+            idx: 선박 인덱스
+        """
         ship = current_project.get_ship_by_idx(idx)
         if not ship: return
 
@@ -606,12 +783,13 @@ class MainWindow(QMainWindow):
         self.data_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)  # type: ignore
         self.data_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)  # type: ignore
         self.data_table.setRowCount(len(ship.raw_points))
-        
+
         mi = current_project.map_info
         for i, (px, py) in enumerate(ship.raw_points):
             _, _, lat, lon = pixel_to_coords(px, py, mi)
             spd = ship.raw_speeds.get(i, 0.0)
-            
+
+            # 체크박스 아이템
             chk_item = QTableWidgetItem()
             chk_item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
             chk_item.setCheckState(Qt.CheckState.Unchecked)
@@ -621,6 +799,7 @@ class MainWindow(QMainWindow):
             self.data_table.setItem(i, 2, QTableWidgetItem(f"{lat:.6f}"))
             self.data_table.setItem(i, 3, QTableWidgetItem(f"{normalize_lon(lon):.6f}"))
 
+            # 속도는 첫 번째 포인트만 편집 가능
             if i == 0:
                 self.data_table.setItem(i, 4, QTableWidgetItem(f"{spd:.1f}"))
             else:
@@ -629,59 +808,75 @@ class MainWindow(QMainWindow):
                 self.data_table.setItem(i, 4, item)
 
             self.data_table.setItem(i, 5, QTableWidgetItem(str(ship.mmsi)))
-            self.data_table.setRowHeight(i, 60)  # 2x default row height
+            self.data_table.setRowHeight(i, 60)
         self.data_table.blockSignals(False)
 
     def show_struct_table(self, sid):
+        """
+        영역의 꼭짓점 데이터를 테이블에 표시합니다.
+
+        매개변수:
+            sid: 영역 ID
+        """
         st = current_project.get_area_by_id(sid)
         if not st: return
-        
+
         self.data_table.blockSignals(True)
         self.data_table.setColumnCount(3)
         self.data_table.setHorizontalHeaderLabels(["Vtx", "Lat", "Lon"])
         self.data_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)  # type: ignore
         self.data_table.setRowCount(len(st.geometry))
-        
+
         mi = current_project.map_info
         for i, (px, py) in enumerate(st.geometry):
             _, _, lat, lon = pixel_to_coords(px, py, mi)
             self.data_table.setItem(i, 0, QTableWidgetItem(str(i)))
             self.data_table.setItem(i, 1, QTableWidgetItem(f"{lat:.6f}"))
             self.data_table.setItem(i, 2, QTableWidgetItem(f"{normalize_lon(lon):.6f}"))
-            self.data_table.setRowHeight(i, 60)  # 2x default row height
+            self.data_table.setRowHeight(i, 60)
         self.data_table.blockSignals(False)
 
     def on_table_changed(self, item):
+        """
+        테이블 셀 값이 변경되었을 때 호출됩니다.
+
+        변경된 값을 해당 객체(선박 또는 영역)에 반영합니다.
+
+        매개변수:
+            item: 변경된 테이블 아이템
+        """
         row = item.row()
         col = item.column()
-        
+
         txt = self.obj_combo.currentText()
         sid = self.obj_combo.currentData()
         mi = current_project.map_info
-        
+
         if "[Ship]" in txt:
             ship = current_project.get_ship_by_idx(sid)
             if not ship or row >= len(ship.raw_points): return
-            
+
+            # 위도/경도 변경
             if col in [2, 3]:
                 try:
                     lat = float(self.data_table.item(row, 2).text())
                     lon = float(self.data_table.item(row, 3).text())
                     px, py = coords_to_pixel(lat, lon, mi)
                     ship.raw_points[row] = (px, py)
-                    self.handle_path_change(ship, redraw=False) 
+                    self.handle_path_change(ship, redraw=False)
                 except: pass
-            elif col == 4: 
+            # 속도 변경 (첫 번째 포인트만)
+            elif col == 4:
                 if row == 0:
                     try:
                         spd = float(item.text())
                         ship.raw_speeds[row] = spd
                         self.invalidate_simulation_data(ship)
                     except: pass
-            
+
             self.redraw_map()
             self.data_changed.emit()
-            
+
         elif "[Area]" in txt:
              st = current_project.get_area_by_id(sid)
              if not st or row >= len(st.geometry): return
@@ -695,6 +890,7 @@ class MainWindow(QMainWindow):
              except: pass
 
     def delete_checked_points(self):
+        """체크된 포인트들을 삭제합니다."""
         txt = self.obj_combo.currentText()
         if "[Ship]" not in txt:
             msg.show_warning(self, "Warning", "Select a Ship first.")
@@ -704,12 +900,13 @@ class MainWindow(QMainWindow):
         ship = current_project.get_ship_by_idx(sid)
         if not ship: return
 
+        # 체크된 행 수집
         rows_to_del = []
         for row in range(self.data_table.rowCount()):
             item = self.data_table.item(row, 0)
             if item and item.checkState() == Qt.CheckState.Checked:
                 rows_to_del.append(row)
-        
+
         if not rows_to_del:
             msg.show_information(self, "Info", "No points selected.")
             return
@@ -717,57 +914,67 @@ class MainWindow(QMainWindow):
         if msg.show_question(self, "Delete", f"Delete {len(rows_to_del)} points?") == msg.StandardButton.No:
             return
 
+        # 역순으로 삭제 (인덱스 유지)
         rows_to_del.sort(reverse=True)
-        
+
         for idx in rows_to_del:
             if idx < len(ship.raw_points):
                 ship.raw_points.pop(idx)
-                
+
+                # 속도 인덱스 재조정
                 new_speeds = {}
                 new_notes = {}
                 for k, v in ship.raw_speeds.items():
                     if k < idx: new_speeds[k] = v
                     elif k > idx: new_speeds[k-1] = v
                 ship.raw_speeds = new_speeds
-                
+
                 for k, v in ship.raw_notes.items():
                     if k < idx: new_notes[k] = v
                     elif k > idx: new_notes[k-1] = v
                 ship.raw_notes = new_notes
 
         self.handle_path_change(ship)
-        self.show_ship_table(sid) 
+        self.show_ship_table(sid)
         self.redraw_map()
 
     def redraw_map(self):
+        """
+        지도를 다시 그립니다.
+
+        모든 선박의 경로와 영역을 씬에 그립니다.
+        선택된 객체는 강조 표시됩니다.
+        """
         self.scene.clear()
         self.add_boundary_masks()
-        
+
         sel_txt = self.obj_combo.currentText()
         sel_id = self.obj_combo.currentData()
         highlight_points = (self.view.mode in ["MOVE_POINT", "DELETE_POINT"])
-        
+
         settings = current_project.settings
-        
+
+        # 선박 경로 그리기
         for s in current_project.ships:
-            # [수정] 랜덤 생성 선박(ID >= 1000)은 Path 화면(Map Editor)에 표시하지 않음
+            # 랜덤 생성 선박(ID >= 1000)은 Path 화면에 표시하지 않음
             if s.idx >= 1000: continue
 
             is_sel = ("[Ship]" in sel_txt and s.idx == sel_id)
             if not s.raw_points: continue
             pts = s.raw_points
 
+            # 경로선 그리기
             if len(pts) >= 2:
                 path = QGraphicsPathItem()
                 pp = QPainterPath()
-                pp.addPolygon(QPolygonF([QPointF(x,y) for x,y in pts]))
+                pp.addPolygon(QPolygonF([QPointF(x, y) for x, y in pts]))
                 path.setPath(pp)
                 w = settings.path_thickness
-                
+
+                # 선박 유형에 따른 색상 설정
                 if s.idx == settings.own_ship_idx: c_hex = settings.own_color
-                # elif s.idx >= 1000: c_hex = settings.random_color # [주석] 위에서 필터링하므로 필요 없음
                 else: c_hex = settings.target_color
-                
+
                 if is_sel:
                     c_hex = settings.select_color
                     w *= settings.select_thickness_mult
@@ -778,21 +985,24 @@ class MainWindow(QMainWindow):
                 path.setZValue(1)
                 self.scene.addItem(path)
 
+            # 포인트 색상 설정
             if s.idx == settings.own_ship_idx: c_hex = settings.own_color
-            # elif s.idx >= 1000: c_hex = settings.random_color
             else: c_hex = settings.target_color
-            
+
             if is_sel: c_hex = settings.select_color
             c_dot = QColor(c_hex)
-            
+
+            # 각 포인트 그리기
             for i, (px, py) in enumerate(s.raw_points):
-                r = 6 
+                r = 6
                 el = QGraphicsEllipseItem(-r/2, -r/2, r, r)
                 el.setBrush(QBrush(c_dot))
                 el.setPen(QPen(Qt.PenStyle.NoPen))
+
+                # 포인트 이동/삭제 모드에서 강조 링 표시
                 if highlight_points:
                     ring = QGraphicsEllipseItem(-(r/2)-4, -(r/2)-4, r+8, r+8)
-                    pen_ring = QPen(QColor("#FF8C00"), 2) 
+                    pen_ring = QPen(QColor("#FF8C00"), 2)
                     pen_ring.setCosmetic(True)
                     ring.setPen(pen_ring)
                     ring.setBrush(QBrush(Qt.BrushStyle.NoBrush))
@@ -800,15 +1010,13 @@ class MainWindow(QMainWindow):
                     ring.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
                     ring.setZValue(1.5)
                     self.scene.addItem(ring)
-                
+
                 el.setPos(px, py)
                 el.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
                 el.setZValue(2)
                 self.scene.addItem(el)
-                
-                # [수정] 랜덤 선박은 여기서 그려지지 않으므로 Speed Note 체크 로직도 단순화됨
-                # if settings.show_speed_notes and s.is_generated: ... (삭제됨)
 
+            # 시작점('i')과 끝점('f') 라벨 표시
             if s.raw_points:
                 start_pt = s.raw_points[0]
                 end_pt = s.raw_points[-1]
@@ -825,9 +1033,10 @@ class MainWindow(QMainWindow):
                 tf.setZValue(3)
                 self.scene.addItem(tf)
 
+        # 영역 그리기
         for st in current_project.areas:
             is_sel = ("[Area]" in sel_txt and st.id == sel_id)
-            poly = QPolygonF([QPointF(x,y) for x,y in st.geometry])
+            poly = QPolygonF([QPointF(x, y) for x, y in st.geometry])
             item = QGraphicsPolygonItem(poly)
             pen = QPen(Qt.GlobalColor.black, 2 if not is_sel else 4)
             pen.setCosmetic(True)
@@ -837,35 +1046,41 @@ class MainWindow(QMainWindow):
             self.scene.addItem(item)
 
     def add_boundary_masks(self):
+        """
+        지도 경계 마스크를 추가합니다.
+
+        유효한 좌표 범위(-180~180 경도, -90~90 위도) 외부를
+        마스크 색상으로 덮습니다.
+        """
         mi = current_project.map_info
         scale = mi.pixels_per_degree
         if scale <= 0: return
-        
+
         c = QColor(current_project.settings.mask_color)
         limit = 1e9
-        
-        # Left of -180
+
+        # 경도 -180 왼쪽 마스크
         r1 = QGraphicsRectItem(-limit, -limit, (-180 * scale) + limit, 2 * limit)
         r1.setBrush(QBrush(c))
         r1.setPen(QPen(Qt.PenStyle.NoPen))
         r1.setZValue(-100)
         self.scene.addItem(r1)
-        
-        # Right of 180
+
+        # 경도 180 오른쪽 마스크
         r2 = QGraphicsRectItem(180 * scale, -limit, limit - (180 * scale), 2 * limit)
         r2.setBrush(QBrush(c))
         r2.setPen(QPen(Qt.PenStyle.NoPen))
         r2.setZValue(-100)
         self.scene.addItem(r2)
-        
-        # Top (Lat > 90 => y < -90*scale)
+
+        # 위도 90 위쪽 마스크 (y < -90*scale)
         r3 = QGraphicsRectItem(-limit, -limit, 2 * limit, (-90 * scale) + limit)
         r3.setBrush(QBrush(c))
         r3.setPen(QPen(Qt.PenStyle.NoPen))
         r3.setZValue(-100)
         self.scene.addItem(r3)
-        
-        # Bottom (Lat < -90 => y > 90*scale)
+
+        # 위도 -90 아래쪽 마스크 (y > 90*scale)
         r4 = QGraphicsRectItem(-limit, 90 * scale, 2 * limit, limit - (90 * scale))
         r4.setBrush(QBrush(c))
         r4.setPen(QPen(Qt.PenStyle.NoPen))
@@ -873,25 +1088,33 @@ class MainWindow(QMainWindow):
         self.scene.addItem(r4)
 
     def add_point_click(self, px, py):
+        """
+        지도 클릭으로 포인트를 추가합니다.
+
+        매개변수:
+            px: 픽셀 X 좌표
+            py: 픽셀 Y 좌표
+        """
         txt = self.obj_combo.currentText()
         if "[Ship]" not in txt:
             msg.show_warning(self, "Warning", "Please select a Ship first.")
             self.set_map_mode("SELECT")
             return
-        
-        # --- Latitude Validation Start ---
+
+        # 위도 유효성 검사
         mi = current_project.map_info
-        _, _, lat, _ = pixel_to_coords(px, py, mi) # Only need lat for validation
+        _, _, lat, _ = pixel_to_coords(px, py, mi)
 
         if not (-90 <= lat <= 90):
             msg.show_warning(self, "Invalid Latitude", "Latitude must be between -90 and +90 degrees. This point will not be saved.")
-            self.set_map_mode("SELECT") # Go back to select mode after warning
-            return # Exit the function without adding the point
-        # --- Latitude Validation End ---
+            self.set_map_mode("SELECT")
+            return
 
         sid = self.obj_combo.currentData()
         ship = current_project.get_ship_by_idx(sid)
         if not ship: return
+
+        # 포인트 정보 입력 다이얼로그
         d = QDialog(self)
         d.setWindowTitle("Add Point Info")
         f = QFormLayout(d)
@@ -904,13 +1127,13 @@ class MainWindow(QMainWindow):
             f.addRow("Speed (kn):", spin_spd)
 
         edit_note = QLineEdit()
-        
+
         f.addRow("Note:", edit_note)
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         bb.accepted.connect(d.accept)
         bb.rejected.connect(d.reject)
         f.addWidget(bb)
-        
+
         if d.exec() == QDialog.DialogCode.Accepted:
             new_idx = len(ship.raw_points)
             ship.raw_points.append((px, py))
@@ -920,6 +1143,7 @@ class MainWindow(QMainWindow):
             self.handle_path_change(ship)
 
     def req_add_point(self):
+        """포인트 추가 방법을 선택하는 다이얼로그를 표시합니다."""
         txt = self.obj_combo.currentText()
         if "[Ship]" not in txt:
             msg.show_warning(self, "Warning", "Please select a Ship first.")
@@ -928,124 +1152,160 @@ class MainWindow(QMainWindow):
         dlg = QDialog(self)
         dlg.setWindowTitle("Add Point Method")
         v = QVBoxLayout(dlg)
-        
+
         lbl = QLabel("How would you like to add the point?")
         v.addWidget(lbl)
-        
+
         btn_map = QPushButton("Click on Map")
         btn_manual = QPushButton("Input Lat/Lon manually")
-        
+
         v.addWidget(btn_map)
         v.addWidget(btn_manual)
-        
+
         def on_map():
             dlg.accept()
             self.set_map_mode("ADD_POINT")
-            
+
         def on_manual():
             dlg.reject()
             self.manual_add_point_dialog()
-            
+
         btn_map.clicked.connect(on_map)
         btn_manual.clicked.connect(on_manual)
-        
+
         dlg.exec()
 
     def manual_add_point_dialog(self):
+        """좌표를 직접 입력하여 포인트를 추가하는 다이얼로그를 표시합니다."""
         d = QDialog(self)
         d.setWindowTitle("Input Coordinates")
         f = QFormLayout(d)
-        
+
         lat_spin = QDoubleSpinBox(); lat_spin.setRange(-90, 90); lat_spin.setDecimals(6)
         lon_spin = QDoubleSpinBox(); lon_spin.setRange(-180, 180); lon_spin.setDecimals(6)
-        
+
         f.addRow("Latitude:", lat_spin)
         f.addRow("Longitude:", lon_spin)
-        
+
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         bb.accepted.connect(d.accept)
         bb.rejected.connect(d.reject)
         f.addWidget(bb)
-        
+
         if d.exec() == QDialog.DialogCode.Accepted:
             mi = current_project.map_info
             px, py = coords_to_pixel(lat_spin.value(), lon_spin.value(), mi)
             self.add_point_click(px, py)
 
     def handle_path_change(self, ship, redraw=True):
+        """
+        경로가 변경되었을 때 처리합니다.
+
+        경로를 리샘플링하고 시뮬레이션 데이터를 무효화합니다.
+
+        매개변수:
+            ship: 변경된 선박
+            redraw: 지도 다시 그리기 여부
+        """
         if len(ship.raw_points) < 2:
             ship.resampled_points = list(ship.raw_points)
         else:
             ship.resampled_points = resample_polyline_numpy(ship.raw_points, 60)
-        
+
         self.invalidate_simulation_data(ship)
-        
+
         if redraw:
             self.redraw_map()
             self.on_obj_selected()
-        
+
         self.data_changed.emit()
 
     def invalidate_simulation_data(self, ship):
-        # ship.is_generated = False # No longer used in the same way
-        ship.time_series = [] 
-        ship.packed_data = None 
+        """
+        선박의 시뮬레이션 데이터를 무효화합니다.
+
+        경로나 속도가 변경되었을 때 호출되어 시뮬레이션 데이터를 초기화합니다.
+
+        매개변수:
+            ship: 대상 선박
+        """
+        ship.time_series = []
+        ship.packed_data = None
         ship.cumulative_time = []
         ship.total_duration_sec = 0.0
         self.check_sim_ready()
-        
+
+        # 시뮬레이션 실행 중이면 리셋
         if self.sim_panel and self.sim_panel.worker and self.sim_panel.worker.running:
             self.sim_panel.reset_state()
 
     def check_sim_ready(self):
+        """시뮬레이션 준비 상태를 확인합니다."""
         ready = True
         if not current_project.ships: ready = False
-        # Logic changed: Ready if ships exist and have points. No pre-generation needed.
+
+        # 모든 선박이 포인트를 가지고 있는지 확인
         for s in current_project.ships:
             if not s.raw_points:
                 ready = False
                 break
-        
+
         txt = self.obj_combo.currentText()
         if "[Ship]" in txt:
             sid = self.obj_combo.currentData()
             s = current_project.get_ship_by_idx(sid)
 
     def delete_points(self, s_idx, p_idx):
+        """
+        선박의 특정 포인트를 삭제합니다.
+
+        매개변수:
+            s_idx: 선박 인덱스
+            p_idx: 포인트 인덱스
+        """
         if msg.show_question(self, "Delete", "Delete this point and all subsequent points?") == msg.StandardButton.No:
             return
 
         ship = current_project.get_ship_by_idx(s_idx)
         if ship:
             ship.raw_points.pop(p_idx)
+
+            # 인덱스 재조정
             new_speeds = {}
             new_notes = {}
             for k, v in ship.raw_speeds.items():
                 if k < p_idx: new_speeds[k] = v
                 elif k > p_idx: new_speeds[k-1] = v
             ship.raw_speeds = new_speeds
-            
+
             for k, v in ship.raw_notes.items():
                 if k < p_idx: new_notes[k] = v
                 elif k > p_idx: new_notes[k-1] = v
             ship.raw_notes = new_notes
-            
+
             self.handle_path_change(ship)
             self.set_map_mode("SELECT")
 
     def add_area_dialog(self):
+        """영역 추가 모드를 시작합니다."""
         self.set_map_mode("ADD_AREA")
 
     def finish_add_area(self, raw_pts):
+        """
+        영역 추가를 완료합니다.
+
+        매개변수:
+            raw_pts: 드로잉된 원시 포인트 목록
+        """
         d = QDialog(self)
         d.setWindowTitle("New Area")
         f = QFormLayout(d)
-        
+
         name_edit = QLineEdit(f"Area-{len(current_project.areas)}")
         spin = QSpinBox()
         spin.setValue(12)
         spin.setMinimum(3)
-        
+
         c_btn = QPushButton()
         c_btn.setStyleSheet("background-color: #808080")
         color_val = ["#808080"]
@@ -1055,18 +1315,19 @@ class MainWindow(QMainWindow):
                 color_val[0] = c.name()
                 c_btn.setStyleSheet(f"background-color: {c.name()}")
         c_btn.clicked.connect(pk)
-        
+
         f.addRow("Name:", name_edit)
         f.addRow("Vertices:", spin)
         f.addRow("Color:", c_btn)
-        
+
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
         bb.accepted.connect(d.accept)
         f.addWidget(bb)
         d.exec()
-        
+
+        # 지정된 꼭짓점 수로 리샘플링
         resampled = resample_polygon_equidistant(raw_pts, spin.value())
-        
+
         sid = len(current_project.areas)
         st = Area(id=sid, name=name_edit.text() or f"Area-{sid}", geometry=resampled, color=color_val[0])
         current_project.areas.append(st)
@@ -1075,6 +1336,7 @@ class MainWindow(QMainWindow):
         self.data_changed.emit()
 
     def change_area_color(self):
+        """선택된 영역의 색상을 변경합니다."""
         txt = self.obj_combo.currentText()
         if "[Area]" not in txt:
             msg.show_information(self, "Info", "Please select an Area.")
@@ -1089,9 +1351,15 @@ class MainWindow(QMainWindow):
                 self.data_changed.emit()
 
     def translate_path_dialog(self, ship_idx):
+        """
+        경로 이동 다이얼로그를 표시합니다.
+
+        매개변수:
+            ship_idx: 선박 인덱스
+        """
         ship = current_project.get_ship_by_idx(ship_idx)
         if not ship: return
-        
+
         d = QDialog(self)
         d.setWindowTitle("Translate Path")
         f = QFormLayout(d)
@@ -1103,15 +1371,15 @@ class MainWindow(QMainWindow):
         bb.accepted.connect(d.accept)
         bb.rejected.connect(d.reject)
         f.addWidget(bb)
-        
+
         if d.exec() == QDialog.DialogCode.Accepted:
             dlon, dlat = e_spin.value(), n_spin.value()
             mi = current_project.map_info
-            
+
             scale = mi.pixels_per_degree
             dpx = dlon * scale
-            dpy = -dlat * scale 
-            
+            dpy = -dlat * scale
+
             new_raw = []
             for (px, py) in ship.raw_points:
                 new_raw.append((px + dpx, py + dpy))
@@ -1119,6 +1387,7 @@ class MainWindow(QMainWindow):
             self.handle_path_change(ship)
 
     def new_project(self):
+        """새 프로젝트를 생성합니다."""
         dlg = NewProjectDialog(self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             title, path, lat, lon, start_t = dlg.get_data()
@@ -1131,28 +1400,31 @@ class MainWindow(QMainWindow):
             current_project.seed = int(datetime.datetime.now().timestamp())
             current_project.settings.path_thickness = 3
             current_project.settings.traveled_path_thickness = 3
-            
-            self.save_project() 
+
+            self.save_project()
             self.update_ui_state(True)
             self.update_info_strip()
             self.update_obj_combo()
             self.redraw_map()
             self.check_sim_ready()
-            
+
+            # 지도 중심 이동
             px, py = coords_to_pixel(lat, lon, current_project.map_info)
             self.view.centerOn(px, py)
-            
+
+            # 초기 줌 설정
             self.view.resetTransform()
             self.view.scale(0.01, 0.01)
 
     def open_project(self):
+        """프로젝트 파일을 열어 로드합니다."""
         fpath, _ = QFileDialog.getOpenFileName(self, "Open Project", "", "JSON Files (*.json)")
         if not fpath: return
-        
+
         try:
             with open(fpath, encoding='utf-8') as f:
                 data = json.load(f)
-                
+
             p = current_project
             p.reset()
             p.project_path = os.path.dirname(fpath)
@@ -1160,11 +1432,13 @@ class MainWindow(QMainWindow):
             p.start_time = datetime.datetime.fromisoformat(data["start_time"])
             p.unit_time = data.get("unit_time", 1.0)
             p.seed = data.get("seed", int(datetime.datetime.now().timestamp()))
-            
+
+            # 맵 정보 로드
             m = data.get("map_info", {})
             p.map_info.center_lat = m.get("center_lat", 35.0)
             p.map_info.center_lon = m.get("center_lon", 129.0)
-            
+
+            # 설정 로드
             s = data.get("settings", {})
             p.settings.own_ship_idx = s.get("own_ship_idx", 0)
             p.settings.include_gp_signal = s.get("include_gp_signal", False)
@@ -1181,26 +1455,25 @@ class MainWindow(QMainWindow):
             p.settings.traveled_path_thickness = s.get("traveled_path_thickness", 3)
             p.settings.dropout_probs = s.get("dropout_probs", {})
             p.settings.theme_mode = s.get("theme_mode", "System")
-            
-
             p.settings.mask_color = s.get("mask_color", "#404040")
 
+            # 선박 로드
             for s_data in data.get("ships", []):
                 ship = ShipData(s_data["ship_index"], s_data["ship_name"])
                 ship.note = s_data.get("note", "")
                 ship.mmsi = s_data.get("mmsi", 0)
-                
+
                 pts = []
                 spds = {}
                 for i, pt in enumerate(s_data.get("control_points", [])):
                     px, py = coords_to_pixel(pt["lat"], pt["lon"], p.map_info)
                     pts.append((px, py))
                     spds[i] = pt.get("speed", 5.0)
-                
+
                 ship.raw_points = pts
                 ship.raw_speeds = spds
 
-                # Load ship class and dimensions (with defaults for backward compatibility)
+                # 선박 클래스 및 제원 로드 (이전 버전 호환)
                 ship.ship_class = s_data.get("ship_class", "CONTAINER")
                 ship.length_m = s_data.get("length_m", 300.0)
                 ship.beam_m = s_data.get("beam_m", 40.0)
@@ -1209,33 +1482,35 @@ class MainWindow(QMainWindow):
                 ship.height_m = s_data.get("height_m", ship.air_draft_m * 0.5)
 
                 ship.total_duration_sec = 0.0
-                ship.packed_data = None 
-                
+                ship.packed_data = None
+
+                # 경로 리샘플링
                 if len(ship.raw_points) < 2:
                     ship.resampled_points = list(ship.raw_points)
                 else:
                     ship.resampled_points = resample_polyline_numpy(ship.raw_points, 60)
-                
+
                 p.ships.append(ship)
 
+            # 영역 로드
             for a_data in data.get("areas", []):
                 pts = []
                 for pt in a_data.get("polygon_points", []):
                     px, py = coords_to_pixel(pt["lat"], pt["lon"], p.map_info)
                     pts.append((px, py))
-                
+
                 area = Area(
-                    id=a_data["area_id"], 
-                    name=a_data["area_name"], 
-                    geometry=pts, 
+                    id=a_data["area_id"],
+                    name=a_data["area_name"],
+                    geometry=pts,
                     color=a_data.get("area_color", "#808080")
                 )
                 area.note = a_data.get("note", "")
                 p.areas.append(area)
 
             p.events = []
-            
-            # Load from Event folder (New Standard)
+
+            # Event 폴더에서 이벤트 로드 (새 표준)
             event_dir = os.path.join(p.project_path, "Event")
             if os.path.exists(event_dir):
                 for fname in os.listdir(event_dir):
@@ -1258,8 +1533,8 @@ class MainWindow(QMainWindow):
                                 evt.action_option = e_data.get("action_option", "")  # type: ignore
                                 p.events.append(evt)
                         except: pass
-            
-            # Fallback: Load from project.json if Event folder was empty or didn't exist (Legacy)
+
+            # 폴백: Event 폴더가 비어있거나 없으면 project.json에서 로드 (레거시)
             if not p.events and data.get("events"):
                 for e_data in data.get("events", []):
                     evt = EventTrigger(
@@ -1277,7 +1552,7 @@ class MainWindow(QMainWindow):
                     evt.action_option = e_data.get("action_option", "")  # type: ignore
                     p.events.append(evt)
 
-            # Load Scenarios from Project/Scenario folder
+            # Scenario 폴더에서 시나리오 로드
             scen_dir = os.path.join(p.project_path, "Scenario")
             app_state.loaded_scenarios = []
             app_state.current_scenario = None
@@ -1288,13 +1563,12 @@ class MainWindow(QMainWindow):
                             from app.core.models.scenario import Scenario
                             scen = Scenario.load_from_file(os.path.join(scen_dir, fname))
                             app_state.loaded_scenarios.append(scen)
-                            
-                            # Sync events to registry
+
+                            # 시나리오 이벤트를 레지스트리에 동기화
                             for s_evt in scen.events:
-                                # Check if exists in project events
                                 existing = next((e for e in p.events if e.id == s_evt.id), None)
                                 if existing:
-                                    # Override with scenario version (as per spec 5.2)
+                                    # 시나리오 버전으로 덮어쓰기
                                     existing.name = s_evt.name
                                     existing.enabled = s_evt.enabled
                                     existing.trigger_type = s_evt.trigger_type
@@ -1306,7 +1580,8 @@ class MainWindow(QMainWindow):
                                     existing.is_relative_to_end = s_evt.is_relative_to_end
                                     existing.action_option = getattr(s_evt, 'action_option', "")  # type: ignore
                         except: pass
-            
+
+            # UI 업데이트
             self.update_ui_state(True)
             self.update_info_strip()
             self.update_obj_combo()
@@ -1314,10 +1589,6 @@ class MainWindow(QMainWindow):
             self.update_stylesheets()
             self.event_panel.refresh_all()
             self.redraw_map()
-            
-            # if self.sim_win:
-            #     self.sim_win.close()
-            #     self.sim_win = None
             self.check_sim_ready()
 
         except Exception as e:
@@ -1325,14 +1596,16 @@ class MainWindow(QMainWindow):
             msg.show_critical(self, "Error Loading Project", str(e))
 
     def save_project(self):
+        """현재 프로젝트를 파일로 저장합니다."""
         p = current_project
         if not p.project_path: return
-        
-        # Create folders
+
+        # 폴더 생성
         os.makedirs(os.path.join(p.project_path, "Object"), exist_ok=True)
         os.makedirs(os.path.join(p.project_path, "Scenario"), exist_ok=True)
         os.makedirs(os.path.join(p.project_path, "Event"), exist_ok=True)
-        
+
+        # 선박 저장
         ships_list = []
         for s in p.ships:
             control_points = []
@@ -1344,14 +1617,13 @@ class MainWindow(QMainWindow):
                     "lon": lon,
                     "speed": spd
                 })
-            
+
             ships_list.append({
                 "ship_index": s.idx,
                 "ship_name": s.name,
                 "mmsi": s.mmsi,
                 "note": s.note,
                 "control_points": control_points,
-                # Ship class and dimensions for camera bbox calculation
                 "ship_class": s.ship_class,
                 "length_m": s.length_m,
                 "beam_m": s.beam_m,
@@ -1359,21 +1631,20 @@ class MainWindow(QMainWindow):
                 "air_draft_m": s.air_draft_m,
                 "height_m": s.height_m
             })
-            
-            # Save individual ship file
+
+            # 개별 선박 파일 저장
             ship_fname = f"Ship_{s.idx}.json"
             with open(os.path.join(p.project_path, "Object", ship_fname), 'w', encoding='utf-8') as f:
                 json.dump(ships_list[-1], f, indent=4)
 
-        # Save Areas individually
-
+        # 영역 저장
         areas_list = []
         for a in p.areas:
             poly_pts = []
             for (px, py) in a.geometry:
                 _, _, lat, lon = pixel_to_coords(px, py, p.map_info)
                 poly_pts.append({"lat": lat, "lon": lon})
-            
+
             areas_list.append({
                 "area_id": a.id,
                 "area_name": a.name,
@@ -1381,13 +1652,14 @@ class MainWindow(QMainWindow):
                 "note": a.note,
                 "polygon_points": poly_pts
             })
-            
+
+            # 개별 영역 파일 저장
             area_fname = f"Area_{a.id}.json"
             with open(os.path.join(p.project_path, "Object", area_fname), 'w', encoding='utf-8') as f:
                 json.dump(areas_list[-1], f, indent=4)
 
+        # 이벤트 저장 (Event 폴더에 개별 파일)
         events_list = []
-        # Save Events individually to Event folder
         for e in p.events:
             e_data = {
                 "id": e.id,
@@ -1402,18 +1674,18 @@ class MainWindow(QMainWindow):
                 "reference_ship_idx": e.reference_ship_idx,
                 "action_option": getattr(e, 'action_option', "")  # type: ignore
             }
-            
-            # Save to Event/{name}.json
+
             fname = sanitize_filename(e.name) + ".json"
             with open(os.path.join(p.project_path, "Event", fname), 'w', encoding='utf-8') as f:
                 json.dump(e_data, f, indent=4)
-            
-        # Save Scenarios
+
+        # 시나리오 저장
         if app_state.loaded_scenarios:
             for scen in app_state.loaded_scenarios:
                 fname = sanitize_filename(scen.name) + ".scenario.json"
                 scen.save_to_file(os.path.join(p.project_path, "Scenario", fname))
 
+        # 메인 프로젝트 파일 저장
         data = {
             "name": p.project_name,
             "project_path": p.project_path,
@@ -1442,15 +1714,14 @@ class MainWindow(QMainWindow):
                 "dropout_probs": p.settings.dropout_probs,
                 "theme_mode": p.settings.theme_mode
             },
-            # Minimal info in project.json, full data in subfolders/files
-            "ships": ships_list, # Keeping for backward compat or easy loading
-            "areas": areas_list, # Keeping for backward compat
-            "events": [] # Events are now in Event folder
+            "ships": ships_list,
+            "areas": areas_list,
+            "events": []  # 이벤트는 Event 폴더에 저장됨
         }
-        
+
         fname = f"{sanitize_filename(p.project_name)}.json"
         full_path = os.path.join(p.project_path, fname)
-        
+
         try:
             with open(full_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=4)
@@ -1459,9 +1730,10 @@ class MainWindow(QMainWindow):
             msg.show_critical(self, "Error Saving", str(e))
 
     def clear_cache(self):
+        """프로젝트 폴더의 __pycache__ 디렉토리를 삭제합니다."""
         if msg.show_question(self, "Clear Cache", "Delete all __pycache__ folders in the project?\n(They will be regenerated automatically)") != msg.StandardButton.Yes:
             return
-            
+
         base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         count = 0
         for root, dirs, files in os.walk(base_dir):
@@ -1473,6 +1745,7 @@ class MainWindow(QMainWindow):
         msg.show_information(self, "Done", f"Deleted {count} cache directories.")
 
     def add_ship_dialog(self):
+        """새 선박 추가 다이얼로그를 표시합니다."""
         idx = 0
         existing = [s.idx for s in current_project.ships]
         while idx in existing: idx += 1
@@ -1484,15 +1757,15 @@ class MainWindow(QMainWindow):
         data = dlg.get_data()
         s = ShipData(idx, data["name"])
 
-        # Set ship class and dimensions
+        # 선박 클래스 및 제원 설정
         s.ship_class = data["ship_class"]
         s.length_m = data["length_m"]
         s.beam_m = data["beam_m"]
         s.draft_m = data["draft_m"]
         s.air_draft_m = data["air_draft_m"]
-        s.height_m = data["air_draft_m"] * 0.5  # Visible height = half of air draft
+        s.height_m = data["air_draft_m"] * 0.5  # 가시 높이 = 공기흘수의 절반
 
-        # Generate unique MMSI
+        # 고유 MMSI 생성
         existing_mmsis = {ship.mmsi for ship in current_project.ships}
         while True:
             candidate = random.randint(100000000, 999999999)
@@ -1506,6 +1779,7 @@ class MainWindow(QMainWindow):
         self.data_changed.emit()
 
     def delete_object(self):
+        """선택된 객체(선박 또는 영역)를 삭제합니다."""
         txt = self.obj_combo.currentText()
         sid = self.obj_combo.currentData()
 
@@ -1514,21 +1788,29 @@ class MainWindow(QMainWindow):
             delete_msg += "\nPath, Speed, Duration data will be lost."
         if msg.show_question(self, "Delete Object", delete_msg) == msg.StandardButton.No:
             return
-        
+
         if "[Ship]" in txt:
              current_project.ships = [s for s in current_project.ships if s.idx != sid]
         elif "[Area]" in txt:
              current_project.areas = [s for s in current_project.areas if s.id != sid]
-        
+
         self.update_obj_combo()
         self.redraw_map()
         self.check_sim_ready()
         self.data_changed.emit()
 
     def on_tab_changed(self, index):
+        """
+        탭이 변경되었을 때 호출됩니다.
+
+        각 탭에 맞는 UI 업데이트를 수행합니다.
+
+        매개변수:
+            index: 선택된 탭 인덱스
+        """
         w = self.tabs.widget(index)
-        
-        # Determine is_dark for map redraw logic if needed
+
+        # 테마 확인
         s = current_project.settings
         mode = s.theme_mode
         is_dark = False
@@ -1536,9 +1818,9 @@ class MainWindow(QMainWindow):
         elif mode == "Light": is_dark = False
         else:
             if QApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark: is_dark = True  # type: ignore
-        input_bg = "#252525" if is_dark else "#ffffff" # Used for map bg logic if needed
-        sel_color = input_bg # Default
-        
+        input_bg = "#252525" if is_dark else "#ffffff"
+        sel_color = input_bg
+
         if w == self.map_editor_widget:
             self.redraw_map()
             sel_color = input_bg
@@ -1551,17 +1833,26 @@ class MainWindow(QMainWindow):
             self.scenario_panel.refresh_ui()
 
     def update_sim_tab_state(self, state):
+        """
+        시뮬레이션 탭 상태를 업데이트합니다.
+
+        시뮬레이션 상태에 따라 탭 텍스트와 아이콘을 변경합니다.
+
+        매개변수:
+            state: 상태 문자열 ("PLAY", "PAUSE", "STOP")
+        """
         idx = self.tabs.indexOf(self.sim_panel)
         if idx == -1: return
-        
+
         def get_white_icon(shape):
+            """흰색 아이콘을 생성합니다."""
             pix = QPixmap(16, 16)
             pix.fill(Qt.GlobalColor.transparent)
             p = QPainter(pix)
             p.setRenderHint(QPainter.RenderHint.Antialiasing)
             p.setBrush(QBrush(Qt.GlobalColor.white))
             p.setPen(Qt.PenStyle.NoPen)
-            
+
             if shape == 'play':
                 path = QPainterPath()
                 path.moveTo(3, 2)
@@ -1572,10 +1863,10 @@ class MainWindow(QMainWindow):
             elif shape == 'pause':
                 p.drawRect(3, 2, 4, 12)
                 p.drawRect(9, 2, 4, 12)
-            
+
             p.end()
             return QIcon(pix)
-        
+
         if state == "PLAY":
             self.tabs.setTabText(idx, "   Simulation (Running)")
             self.tabs.setTabIcon(idx, get_white_icon('play'))
@@ -1584,7 +1875,7 @@ class MainWindow(QMainWindow):
             self.tabs.setTabIcon(idx, get_white_icon('pause'))
         elif state == "STOP":
             self.tabs.setTabText(idx, "   Simulation (Stopped)")
-            # Create Red Stop Icon
+            # 빨간색 정지 아이콘 생성
             pix = QPixmap(16, 16)
             pix.fill(Qt.GlobalColor.transparent)
             p = QPainter(pix)
@@ -1595,6 +1886,7 @@ class MainWindow(QMainWindow):
             self.tabs.setTabIcon(idx, QIcon(pix))
 
     def open_settings(self):
+        """설정 다이얼로그를 열고 변경사항을 적용합니다."""
         dlg = SettingsDialog(self)
         if dlg.exec():
             dlg.apply_changes()
@@ -1605,16 +1897,12 @@ class MainWindow(QMainWindow):
             self.data_changed.emit()
 
     def open_user_guide(self):
+        """사용자 가이드 다이얼로그를 표시합니다."""
         dlg = HelpDialog(self)
         dlg.exec()
 
-
-    # def open_sim_panel(self):
-    #     if not self.sim_win:
-    #         self.sim_win = SimulationWindow(self)
-    #     self.sim_win.show()
-
     def on_data_changed(self):
+        """데이터가 변경되었을 때 관련 패널들을 업데이트합니다."""
         if self.sim_panel and self.sim_panel.isVisible():
             self.sim_panel.draw_static_map()
             self.sim_panel.refresh_tables()
@@ -1622,11 +1910,24 @@ class MainWindow(QMainWindow):
         self.scenario_panel.refresh_ui()
 
     def update_ui_state(self, enabled):
+        """
+        UI 상태를 업데이트합니다.
+
+        매개변수:
+            enabled: UI 활성화 여부
+        """
         self.view.setEnabled(enabled)
-        # self.act_speed.setEnabled(enabled)
         self.obj_combo.setEnabled(enabled)
 
     def closeEvent(self, event):
+        """
+        윈도우 닫기 이벤트 핸들러입니다.
+
+        프로젝트 저장 여부를 확인하고 시뮬레이션을 정리합니다.
+
+        매개변수:
+            event: 닫기 이벤트 객체
+        """
         reply = msg.show_question(
             self,
             "Save Project",

@@ -1,3 +1,22 @@
+"""
+시뮬레이션 패널 모듈
+
+이 모듈은 NMEA 신호 시뮬레이션을 제어하는 패널을 제공합니다.
+시뮬레이션 시작/정지, UDP 전송, 선박 추적, 랜덤 타겟 생성 등의 기능을 포함합니다.
+
+클래스:
+    TargetInfoDialog: 선박 상세 정보 다이얼로그
+    SimulationPanel: 시뮬레이션 제어 패널
+
+주요 기능:
+    - 시뮬레이션 재생 제어 (시작, 일시정지, 정지)
+    - UDP 송신 설정 및 모니터링
+    - 선박 추적(Follow) 모드
+    - 랜덤 타겟 생성(RTG)
+    - CSV 로그 기록
+    - 선박별 신호 제어
+"""
+
 import os
 import math
 import csv
@@ -37,7 +56,19 @@ from app.ui.widgets.panorama_view import PanoramaView
 from app.ui.widgets import message_box as msgbox
 import app.core.state as app_state
 
+
 class TargetInfoDialog(QDialog):
+    """
+    선박 상세 정보를 표시하는 다이얼로그 클래스입니다.
+
+    기본 정보, 항해 상태, 자선과의 상대 정보, 선박 제원,
+    신호 상태, 이벤트 상태, 카메라 파노라마 뷰를 표시합니다.
+
+    속성:
+        ship_idx: 표시할 선박 인덱스
+        worker: 시뮬레이션 워커 참조
+        timer: 정보 업데이트 타이머
+    """
     # Panorama constants (matching simulation_worker.py)
     PANO_W_PX = 1920
     PANO_H_PX = 320
@@ -586,12 +617,37 @@ class ExtraTimeDialog(QDialog):
         return self.time_input.get_seconds()
 
 class SimulationPanel(QWidget):
+    """
+    NMEA 신호 시뮬레이션을 제어하는 패널 클래스입니다.
+
+    지도 뷰에서 선박 위치를 표시하고, 시뮬레이션 재생을 제어하며,
+    UDP 전송, CSV 로그 기록, 선박 추적 등의 기능을 제공합니다.
+
+    시그널:
+        state_changed: 시뮬레이션 상태 변경 시 발생
+        simulation_status_updated: 시뮬레이션 상태 업데이트 시 발생
+        sig_set_ship_speed: 선박 속도 변경 요청 시 발생
+        sig_set_ship_heading: 선박 침로 변경 요청 시 발생
+
+    속성:
+        ship_items: 선박 마커 그래픽 아이템 딕셔너리
+        worker: SimulationWorker 인스턴스
+        is_paused: 일시정지 상태
+        sim_time_limit: 시뮬레이션 시간 제한(초)
+    """
+
     state_changed = pyqtSignal(str)
     simulation_status_updated = pyqtSignal(str, list)
     sig_set_ship_speed = pyqtSignal(int, float)
     sig_set_ship_heading = pyqtSignal(int, float)
 
     def __init__(self, parent=None):
+        """
+        SimulationPanel을 초기화합니다.
+
+        매개변수:
+            parent: 부모 위젯 (기본값: None)
+        """
         super().__init__(parent)
         self.ship_items = {}
         self.ship_indicators = {}

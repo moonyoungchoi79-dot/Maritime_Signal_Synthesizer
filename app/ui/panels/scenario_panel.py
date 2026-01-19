@@ -1,3 +1,19 @@
+"""
+시나리오 패널 모듈
+
+이 모듈은 시뮬레이션 시나리오를 관리하는 패널을 제공합니다.
+시나리오는 여러 이벤트를 조합하여 복잡한 시뮬레이션 흐름을 정의합니다.
+
+클래스:
+    ScenarioPanel: 시나리오 관리 패널
+
+주요 기능:
+    - 시나리오 생성, 열기, 저장
+    - 이벤트 조합 및 순서 관리
+    - 적용 범위(Scope) 설정
+    - 선행 이벤트 조건 설정
+"""
+
 import os
 import uuid
 import copy
@@ -19,9 +35,32 @@ from app.ui.widgets.time_input_widget import TimeInputWidget
 from app.ui.widgets import message_box as msgbox
 import app.core.state as app_state
 
+
 class ScenarioPanel(QWidget):
+    """
+    시뮬레이션 시나리오를 관리하는 패널 클래스입니다.
+
+    좌측에 로드된 시나리오 목록, 우측에 시나리오 편집기를 배치합니다.
+    시나리오에 이벤트를 추가하고 선행 이벤트 조건을 설정할 수 있습니다.
+
+    시그널:
+        data_changed: 데이터 변경 시 발생
+
+    속성:
+        list_scenarios: 시나리오 목록 위젯
+        list_scen_events: 시나리오 이벤트 목록 위젯
+        editor_group: 이벤트 편집기 그룹박스
+    """
+
     data_changed = pyqtSignal()
+
     def __init__(self, parent=None):
+        """
+        ScenarioPanel을 초기화합니다.
+
+        매개변수:
+            parent: 부모 위젯 (기본값: None)
+        """
         super().__init__(parent)
         
         # Initialize global state if None

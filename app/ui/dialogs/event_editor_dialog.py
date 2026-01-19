@@ -1,3 +1,13 @@
+"""
+이벤트 편집기 다이얼로그 모듈
+
+이 모듈은 시뮬레이션 이벤트를 생성하고 편집하는 다이얼로그를 제공합니다.
+이벤트는 트리거 조건과 액션으로 구성되며, 선행 이벤트 조건도 설정할 수 있습니다.
+
+클래스:
+    EventEditorDialog: 이벤트 편집 다이얼로그
+"""
+
 import uuid
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QLineEdit,
@@ -9,8 +19,30 @@ from app.core.models.event import SimEvent, EventCondition
 from app.core.models.project import current_project
 from app.ui.widgets import message_box as msgbox
 
+
 class EventEditorDialog(QDialog):
+    """
+    시뮬레이션 이벤트를 생성하고 편집하는 다이얼로그 클래스입니다.
+
+    이벤트는 트리거(조건)와 액션(동작)으로 구성됩니다.
+    트리거 유형: TIME, AREA_ENTER, AREA_LEAVE, CPA_UNDER, CPA_OVER, DIST_UNDER, DIST_OVER
+    액션 유형: STOP, CHANGE_SPEED, CHANGE_HEADING, MANEUVER, CHANGE_DESTINATION_LOC
+
+    속성:
+        event: 편집 중인 SimEvent 객체 (새 이벤트 생성 시 None)
+        trigger_type_combo: 트리거 유형 선택 콤보박스
+        action_type_combo: 액션 유형 선택 콤보박스
+        prereq_list: 선행 이벤트 조건 목록 위젯
+    """
+
     def __init__(self, parent=None, event=None):
+        """
+        EventEditorDialog를 초기화합니다.
+
+        매개변수:
+            parent: 부모 위젯 (기본값: None)
+            event: 편집할 기존 이벤트 (기본값: None, 새 이벤트 생성 시)
+        """
         super().__init__(parent)
         self.setWindowTitle("Edit Event" if event else "New Event")
         self.event = event
@@ -25,6 +57,11 @@ class EventEditorDialog(QDialog):
             self.update_action_ui()
 
     def init_ui(self):
+        """
+        UI 레이아웃을 초기화합니다.
+
+        트리거 그룹, 액션 그룹, 선행 이벤트 그룹을 생성하고 배치합니다.
+        """
         layout = QVBoxLayout(self)
         
         form = QFormLayout()
@@ -147,30 +184,51 @@ class EventEditorDialog(QDialog):
         layout.addWidget(btns)
 
     def populate_ships(self, combo, include_own=True):
+        """
+        선박 목록을 콤보박스에 채웁니다.
+
+        매개변수:
+            combo: 대상 QComboBox 위젯
+            include_own: 자선(Own Ship) 옵션 포함 여부 (기본값: True)
+        """
         combo.clear()
         if include_own:
              combo.addItem(f"Own Ship (Default)", -1)
-             
+
         own_idx = current_project.settings.own_ship_idx
         for s in current_project.ships:
             tag = "Own" if s.idx == own_idx else ("R" if s.idx >= 1000 else "T")
             combo.addItem(f"[{tag}] {s.name}", s.idx)
 
     def populate_areas(self):
+        """
+        영역 목록을 콤보박스에 채웁니다.
+
+        프로젝트에 정의된 모든 영역(Area)을 area_combo에 추가합니다.
+        """
         self.area_combo.clear()
         for a in current_project.areas:
             self.area_combo.addItem(a.name, a.id)
 
     def _populate_event_combo(self):
-        """Populate combo box with other events"""
+        """
+        선행 이벤트 콤보박스를 채웁니다.
+
+        현재 편집 중인 이벤트 자신은 제외하고 모든 이벤트를 목록에 추가합니다.
+        """
         self.prereq_event_combo.clear()
         current_id = self.event.id if self.event else None
         for evt in current_project.events:
-            if evt.id != current_id:  # Exclude self
+            if evt.id != current_id:
                 self.prereq_event_combo.addItem(evt.name, evt.id)
 
     def _add_prerequisite(self):
-        """Add prerequisite condition"""
+        """
+        선행 이벤트 조건을 추가합니다.
+
+        선택된 이벤트와 모드(TRIGGERED/NOT_TRIGGERED)를 prereq_list에 추가합니다.
+        이미 추가된 이벤트는 중복 추가를 방지합니다.
+        """
         if self.prereq_event_combo.count() == 0:
             return
 
@@ -192,12 +250,24 @@ class EventEditorDialog(QDialog):
         self.prereq_list.addItem(item)
 
     def _remove_prerequisite(self):
-        """Remove selected prerequisite condition"""
+        """
+        선택된 선행 이벤트 조건을 제거합니다.
+
+        prereq_list에서 현재 선택된 항목을 삭제합니다.
+        """
         current_row = self.prereq_list.currentRow()
         if current_row >= 0:
             self.prereq_list.takeItem(current_row)
 
     def update_trigger_ui(self):
+        """
+        트리거 유형에 따라 UI를 업데이트합니다.
+
+        선택된 트리거 유형에 맞는 입력 필드만 표시합니다.
+        - TIME: 시간(초) 입력 필드
+        - AREA_*: 영역 선택 콤보박스
+        - DIST_*/CPA_*: 기준 선박 및 거리/시간 입력 필드
+        """
         ttype = self.trigger_type_combo.currentText()
         
         self.ref_ship_combo.setVisible(False)
@@ -222,6 +292,15 @@ class EventEditorDialog(QDialog):
             self.condition_val_label.setVisible(True)
 
     def update_action_ui(self):
+        """
+        액션 유형에 따라 UI를 업데이트합니다.
+
+        선택된 액션 유형에 맞는 입력 필드만 표시합니다.
+        - CHANGE_SPEED: 속도(kn) 입력 필드
+        - CHANGE_HEADING: 침로(deg) 입력 필드
+        - MANEUVER: 기동 옵션 콤보박스
+        - CHANGE_DESTINATION_LOC: 위도/경도 입력 필드
+        """
         atype = self.action_type_combo.currentText()
         self.action_val_spin.setVisible(False)
         self.action_val_label.setVisible(False)
@@ -252,6 +331,12 @@ class EventEditorDialog(QDialog):
             self.lon_label.setVisible(True)
 
     def load_event(self):
+        """
+        기존 이벤트 데이터를 UI에 로드합니다.
+
+        self.event에 저장된 이벤트 정보를 각 입력 필드에 표시합니다.
+        트리거 설정, 액션 설정, 선행 이벤트 조건을 모두 로드합니다.
+        """
         self.name_edit.setText(self.event.name)
         self.enabled_chk.setChecked(self.event.enabled)
         
@@ -315,6 +400,13 @@ class EventEditorDialog(QDialog):
             self.prereq_list.addItem(item)
 
     def on_ok(self):
+        """
+        확인 버튼 클릭 시 이벤트 데이터를 저장합니다.
+
+        UI에 입력된 값들을 검증하고 self.event 객체에 저장합니다.
+        새 이벤트인 경우 SimEvent 객체를 새로 생성합니다.
+        이름이 비어있으면 경고를 표시하고 저장하지 않습니다.
+        """
         name = self.name_edit.text().strip()
         if not name:
             msgbox.show_warning(self, "Error", "Name required")
@@ -355,4 +447,10 @@ class EventEditorDialog(QDialog):
         self.accept()
 
     def get_event(self):
+        """
+        편집된 이벤트 객체를 반환합니다.
+
+        반환값:
+            SimEvent: 생성 또는 편집된 이벤트 객체
+        """
         return self.event

@@ -1,3 +1,19 @@
+"""
+설정 다이얼로그 모듈
+
+이 모듈은 애플리케이션의 전반적인 설정을 관리하는 다이얼로그를 제공합니다.
+외관(테마, 색상), 수신 모델, 객체 관리, 신호 노이즈 설정 등을 포함합니다.
+
+클래스:
+    SettingsDialog: 설정 다이얼로그
+
+주요 기능:
+    - Appearance: 테마, 색상, 경로 두께 설정
+    - Reception Model: 거리 기반 신호 수신 확률 모델 설정
+    - Object: 자선 지정, 객체 목록 관리
+    - Signal: 신호별 노이즈 레벨 및 AIS 프래그먼트 확률 설정
+"""
+
 from PyQt6.QtWidgets import (
     QDialog, QHBoxLayout, QListWidget, QFrame, QStackedWidget, QVBoxLayout,
     QDialogButtonBox, QWidget, QGroupBox, QFormLayout, QPushButton, QLabel,
@@ -22,8 +38,32 @@ import numpy as np
 from app.core.models.project import current_project
 from app.core.models.settings import RECEPTION_PRESETS, ReceptionModelConfig, ARPATrackConfig
 
+
 class SettingsDialog(QDialog):
+    """
+    애플리케이션 설정을 관리하는 다이얼로그 클래스입니다.
+
+    좌측 목록에서 카테고리를 선택하면 우측에 해당 설정 페이지가 표시됩니다.
+
+    카테고리:
+        - Appearance: 외관 설정 (테마, 색상, 경로 두께)
+        - Reception Model: 거리 기반 수신 확률 모델 (AIS, Radar, ARPA, Camera)
+        - Object: 자선 지정 및 객체 목록 관리
+        - Signal: 신호 노이즈 및 AIS 프래그먼트 확률
+
+    속성:
+        list_widget: 카테고리 목록 위젯
+        stack: 카테고리별 설정 페이지 스택
+        reception_widgets: 수신 모델 설정 위젯 참조 딕셔너리
+    """
+
     def __init__(self, parent=None):
+        """
+        SettingsDialog를 초기화합니다.
+
+        매개변수:
+            parent: 부모 위젯 (기본값: None)
+        """
         super().__init__(parent)
         self.setWindowTitle("Settings")
         self.resize(1260, 728)
@@ -58,6 +98,11 @@ class SettingsDialog(QDialog):
         main_h.addLayout(btn_layout)
 
     def init_appearance(self):
+        """
+        외관(Appearance) 설정 페이지를 초기화합니다.
+
+        객체 색상, 경로 시각화, UI 테마 설정을 포함합니다.
+        """
         w = QWidget()
         main_layout = QVBoxLayout(w)
         
@@ -157,7 +202,13 @@ class SettingsDialog(QDialog):
         self.stack.addWidget(w)
 
     def init_dropout(self):
-        """Reception Model (거리 기반 수신 모델) 탭 초기화"""
+        """
+        수신 모델(Reception Model) 설정 페이지를 초기화합니다.
+
+        거리 기반 신호 수신 확률 모델을 설정합니다.
+        AIS, Radar, ARPA, Camera 각각에 대해 독립적인 설정이 가능합니다.
+        프리셋(Realistic, Stable, Harsh)을 제공하며 커스텀 설정도 가능합니다.
+        """
         w = QWidget()
         main_layout = QVBoxLayout(w)
 
@@ -216,7 +267,25 @@ class SettingsDialog(QDialog):
         self.stack.addWidget(w)
 
     def _create_reception_tab(self, tab_type: str, config, is_arpa: bool = False):
-        """각 신호 타입별 수신 모델 탭 생성"""
+        """
+        신호 타입별 수신 모델 설정 탭을 생성합니다.
+
+        매개변수:
+            tab_type: 신호 타입 ('ais', 'radar', 'arpa', 'camera')
+            config: 현재 수신 모델 설정 객체
+            is_arpa: ARPA 전용 설정 포함 여부
+
+        반환값:
+            QScrollArea: 생성된 탭 위젯
+
+        설정 항목:
+            - d0: 최대 신뢰 거리 (이 거리까지는 p0 확률 유지)
+            - d1: 페이드아웃 종료 거리 (이 거리에서 p1 확률 도달)
+            - p0: 근거리 드롭아웃 확률
+            - p1: d1에서의 드롭아웃 확률
+            - 곡선 타입: smoothstep, linear, logistic
+            - 버스트 손실 설정
+        """
         is_camera = (tab_type == "camera")
 
         scroll = QScrollArea()
@@ -358,7 +427,15 @@ class SettingsDialog(QDialog):
         return scroll
 
     def _create_preview_tab(self):
-        """Preview 탭 생성 (pyqtgraph 그래프)"""
+        """
+        Preview 탭을 생성합니다.
+
+        pyqtgraph를 사용하여 거리에 따른 드롭아웃 확률을 시각화합니다.
+        각 신호 타입별 확률 곡선과 현재 거리에서의 확률 값을 표시합니다.
+
+        반환값:
+            QWidget: 생성된 Preview 탭 위젯
+        """
         tab_widget = QWidget()
         layout = QVBoxLayout(tab_widget)
 
@@ -425,7 +502,21 @@ class SettingsDialog(QDialog):
         return tab_widget
 
     def _calculate_dropout_prob(self, distance, config) -> float:
-        """거리 기반 드롭아웃 확률 계산"""
+        """
+        거리 기반 드롭아웃 확률을 계산합니다.
+
+        매개변수:
+            distance: 자선으로부터의 거리 (NM)
+            config: 수신 모델 설정 객체
+
+        반환값:
+            float: 드롭아웃 확률 (0.0 ~ 1.0)
+
+        계산 로직:
+            - d <= d0: p0 반환 (근거리 고정 확률)
+            - d >= d1: full_block이면 1.0, 아니면 p1 반환
+            - d0 < d < d1: 곡선 타입에 따라 보간
+        """
         d, d0, d1, p0, p1 = distance, config.d0, config.d1, config.p0, config.p1
 
         if d <= d0:
@@ -445,7 +536,15 @@ class SettingsDialog(QDialog):
             return p0 + (p1 - p0) * factor
 
     def _get_current_config(self, tab_type: str):
-        """현재 UI 값으로 ReceptionModelConfig 객체 생성"""
+        """
+        현재 UI 값으로 수신 모델 설정 객체를 생성합니다.
+
+        매개변수:
+            tab_type: 신호 타입 ('ais', 'radar', 'arpa', 'camera')
+
+        반환값:
+            ReceptionModelConfig 또는 ARPATrackConfig: 생성된 설정 객체
+        """
         widgets = self.reception_widgets.get(tab_type, {})
         if not widgets:
             return None
@@ -481,7 +580,12 @@ class SettingsDialog(QDialog):
         return config
 
     def _update_preview(self):
-        """Preview 그래프 업데이트"""
+        """
+        Preview 그래프를 업데이트합니다.
+
+        모든 신호 타입의 드롭아웃 확률 곡선을 다시 그리고,
+        현재 슬라이더 위치에서의 확률 값을 표시합니다.
+        """
         if not PYQTGRAPH_AVAILABLE or not hasattr(self, 'preview_plot'):
             return
 
@@ -502,25 +606,49 @@ class SettingsDialog(QDialog):
                 self.prob_labels[tab_type].setText(f"{prob:.1f}%")
 
     def _on_preview_slider_changed(self, value):
-        """Preview 슬라이더 값 변경"""
+        """
+        Preview 슬라이더 값 변경 시 호출됩니다.
+
+        매개변수:
+            value: 새 슬라이더 값 (거리, NM)
+        """
         self.preview_dist_label.setText(f"{value} NM")
         if PYQTGRAPH_AVAILABLE and hasattr(self, 'preview_vline'):
             self.preview_vline.setPos(value)
         self._update_preview()
 
     def _on_reception_enabled_changed(self):
-        """수신 모델 활성화/비활성화"""
+        """
+        수신 모델 활성화/비활성화 상태 변경 시 호출됩니다.
+
+        체크 해제 시 수신 모델 관련 UI를 비활성화합니다.
+        """
         enabled = self.chk_reception_enabled.isChecked()
         self.reception_tabs.setEnabled(enabled)
         self.combo_preset.setEnabled(enabled)
         self.btn_reset_preset.setEnabled(enabled)
 
     def _on_preset_changed(self, index):
-        """프리셋 변경 시 Custom으로 자동 전환하지 않음 (Reset 버튼 사용)"""
+        """
+        프리셋 콤보박스 변경 시 호출됩니다.
+
+        현재는 자동 적용하지 않고 Reset 버튼을 통해 적용합니다.
+
+        매개변수:
+            index: 선택된 프리셋 인덱스
+        """
         pass
 
     def _apply_preset(self):
-        """선택된 프리셋 적용"""
+        """
+        선택된 프리셋을 모든 신호 타입에 적용합니다.
+
+        프리셋 종류:
+            - realistic: 현실적인 수신 환경
+            - stable: 안정적인 데모 환경
+            - harsh: 열악한 스트레스 테스트 환경
+            - custom: 사용자 정의 (적용하지 않음)
+        """
         preset_names = ["realistic", "stable", "harsh", "custom"]
         preset_name = preset_names[self.combo_preset.currentIndex()]
 
@@ -548,7 +676,13 @@ class SettingsDialog(QDialog):
         self._update_preview()
 
     def _apply_preset_to_tab(self, tab_type: str, preset_data: dict):
-        """프리셋 데이터를 탭에 적용"""
+        """
+        프리셋 데이터를 특정 탭에 적용합니다.
+
+        매개변수:
+            tab_type: 신호 타입 ('ais', 'radar', 'arpa', 'camera')
+            preset_data: 프리셋 설정 딕셔너리
+        """
         widgets = self.reception_widgets.get(tab_type, {})
         if not widgets:
             return
@@ -567,6 +701,11 @@ class SettingsDialog(QDialog):
             widgets['reacquire'].setValue(preset_data['reacquire_prob'])
 
     def init_object(self):
+        """
+        객체(Object) 설정 페이지를 초기화합니다.
+
+        자선 인덱스 지정, 랜덤 타겟 설정, 객체 목록 관리 기능을 포함합니다.
+        """
         w = QWidget()
         l = QVBoxLayout(w)
         
@@ -659,6 +798,12 @@ class SettingsDialog(QDialog):
         self.stack.addWidget(w)
         
     def delete_checked_objects(self):
+        """
+        체크된 객체들을 삭제합니다.
+
+        객체 목록에서 체크된 선박과 영역을 프로젝트에서 제거합니다.
+        삭제 전 확인 대화상자를 표시합니다.
+        """
         rows_to_del = []
         for row in range(self.obj_table.rowCount()):
             item = self.obj_table.item(row, 0)
@@ -694,6 +839,11 @@ class SettingsDialog(QDialog):
         QMessageBox.information(self, "Deleted", "Deleted.")
 
     def init_signal(self):
+        """
+        신호(Signal) 설정 페이지를 초기화합니다.
+
+        AIS 프래그먼트 확률과 선박별 신호 노이즈 레벨을 설정합니다.
+        """
         w = QWidget()
         layout = QVBoxLayout(w)
         
@@ -754,6 +904,15 @@ class SettingsDialog(QDialog):
         self.stack.addWidget(w)
 
     def _create_signal_noise_cell(self, value):
+        """
+        신호 노이즈 테이블 셀 위젯을 생성합니다.
+
+        매개변수:
+            value: 초기 노이즈 값
+
+        반환값:
+            QDoubleSpinBox: 생성된 스핀박스 위젯
+        """
         spin = QDoubleSpinBox()
         spin.setRange(0, 1.0)
         spin.setSingleStep(0.001)
@@ -764,6 +923,15 @@ class SettingsDialog(QDialog):
         return spin
 
     def on_signal_noise_changed(self, value):
+        """
+        신호 노이즈 값 변경 시 호출됩니다.
+
+        매개변수:
+            value: 새 노이즈 값
+
+        첫 번째 행(ALL)이나 첫 번째 열(Ctrl)의 값 변경 시
+        해당 행/열의 모든 셀에 같은 값이 적용됩니다.
+        """
         sender_spin = self.sender()
         if not sender_spin: return
 
@@ -798,6 +966,16 @@ class SettingsDialog(QDialog):
                     self._set_signal_noise_spinbox(row, col, value)
     
     def _set_signal_noise_spinbox(self, r, c, value):
+        """
+        특정 셀의 스핀박스 값을 설정합니다.
+
+        시그널 발생 없이 값을 변경합니다.
+
+        매개변수:
+            r: 행 인덱스
+            c: 열 인덱스
+            value: 설정할 값
+        """
         widget = self.signal_noise_table.cellWidget(r, c)
         if widget and isinstance(widget, QDoubleSpinBox):
             widget.blockSignals(True)
@@ -805,12 +983,25 @@ class SettingsDialog(QDialog):
             widget.blockSignals(False)
 
     def pick_color(self, btn, attr):
+        """
+        색상 선택 다이얼로그를 표시하고 선택된 색상을 적용합니다.
+
+        매개변수:
+            btn: 색상을 표시할 버튼 위젯
+            attr: 설정에 저장할 속성 이름
+        """
         c = QColorDialog.getColor()
         if c.isValid():
             setattr(current_project.settings, attr, c.name())
             btn.setStyleSheet(f"background-color: {c.name()}")
 
     def apply_changes(self):
+        """
+        모든 설정 변경사항을 프로젝트에 적용합니다.
+
+        각 설정 페이지의 UI 값을 읽어 current_project.settings에 저장합니다.
+        테마 변경 시 즉시 적용됩니다.
+        """
         for row in range(self.obj_table.rowCount()):
             obj_id = int(self.obj_table.item(row, 1).text())
             obj_type = self.obj_table.item(row, 2).text()

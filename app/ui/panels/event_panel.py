@@ -1,3 +1,13 @@
+"""
+이벤트 스크립트 패널 모듈
+
+이 모듈은 시뮬레이션 이벤트를 관리하는 패널을 제공합니다.
+이벤트 목록 조회, 추가, 편집, 삭제 기능을 포함합니다.
+
+클래스:
+    EventScriptPanel: 이벤트 스크립트 관리 패널
+"""
+
 import uuid
 
 from PyQt6.QtWidgets import (
@@ -16,8 +26,27 @@ from app.core.models.project import current_project, EventTrigger
 from app.ui.widgets.time_input_widget import TimeInputWidget
 from app.ui.panels.scenario_panel import ScenarioPanel
 
+
 class EventScriptPanel(QWidget):
+    """
+    시뮬레이션 이벤트를 관리하는 패널 클래스입니다.
+
+    좌측에 이벤트 목록 테이블, 우측에 이벤트 편집기를 배치합니다.
+    트리거 조건(TIME, AREA, CPA, DIST)과 액션(STOP, CHANGE_SPEED 등)을 설정할 수 있습니다.
+
+    속성:
+        event_table: 이벤트 목록 테이블 위젯
+        editor_group: 이벤트 편집기 그룹박스
+        current_event_id: 현재 선택된 이벤트 ID
+    """
+
     def __init__(self, parent=None):
+        """
+        EventScriptPanel을 초기화합니다.
+
+        매개변수:
+            parent: 부모 위젯 (기본값: None)
+        """
         super().__init__(parent)
 
         outer_layout = QHBoxLayout(self)
@@ -146,6 +175,11 @@ class EventScriptPanel(QWidget):
         self.update_combos()
 
     def update_combos(self):
+        """
+        편집기의 콤보박스들을 업데이트합니다.
+
+        프로젝트의 영역, 선박 목록으로 콤보박스를 갱신합니다.
+        """
         self.combo_area.clear()
         for a in current_project.areas:
             self.combo_area.addItem(f"{a.name} (ID: {a.id})", a.id)
@@ -159,6 +193,11 @@ class EventScriptPanel(QWidget):
             self.combo_ref.addItem(f"{s.name} (ID: {s.idx})", s.idx)
 
     def update_filter_combo(self):
+        """
+        우선순위 필터 콤보박스를 업데이트합니다.
+
+        수동 선박, 랜덤 타겟, 개별 선박별 필터 옵션을 제공합니다.
+        """
         current_data = self.combo_priority.currentData()
         self.combo_priority.blockSignals(True)
         self.combo_priority.clear()
@@ -181,14 +220,29 @@ class EventScriptPanel(QWidget):
         self.combo_priority.blockSignals(False)
             
     def refresh_all(self):
+        """
+        전체 UI를 새로고침합니다.
+
+        테이블, 필터, 콤보박스를 모두 업데이트합니다.
+        """
         self.refresh_table()
         self.update_filter_combo()
         self.update_combos()
 
     def on_list_reordered(self, parent, start, end, destination, row):
-        pass # Table sorting replaces manual reordering
+        """
+        리스트 재정렬 이벤트 핸들러입니다 (현재 미사용).
+
+        테이블 정렬이 수동 재정렬을 대체합니다.
+        """
+        pass
 
     def refresh_table(self):
+        """
+        이벤트 테이블을 새로고침합니다.
+
+        필터링 및 정렬 기준에 따라 이벤트 목록을 갱신합니다.
+        """
         self.event_table.blockSignals(True)
         self.event_table.setRowCount(0)
 
@@ -255,6 +309,11 @@ class EventScriptPanel(QWidget):
         self.event_table.blockSignals(False)
 
     def add_event(self):
+        """
+        새 이벤트를 추가합니다.
+
+        고유 ID를 생성하고 기본 이름으로 새 이벤트를 프로젝트에 추가합니다.
+        """
         eid = str(uuid.uuid4())
         base_name = "New Event"
         name = base_name
@@ -271,6 +330,11 @@ class EventScriptPanel(QWidget):
         self.select_event_by_id(eid)
 
     def duplicate_event(self):
+        """
+        선택된 이벤트를 복제합니다.
+
+        원본 이벤트의 모든 설정을 복사하여 새 이벤트를 생성합니다.
+        """
         row = self.event_table.currentRow()
         if row < 0: return
         eid = self.event_table.item(row, 0).data(Qt.ItemDataRole.UserRole)
@@ -309,6 +373,11 @@ class EventScriptPanel(QWidget):
         self.select_event_by_id(new_id)
 
     def delete_event(self):
+        """
+        선택된 이벤트를 삭제합니다.
+
+        프로젝트에서 이벤트를 제거하고 테이블을 갱신합니다.
+        """
         row = self.event_table.currentRow()
         if row < 0: return
         eid = self.event_table.item(row, 0).data(Qt.ItemDataRole.UserRole)
@@ -318,22 +387,39 @@ class EventScriptPanel(QWidget):
         self.current_event_id = None
 
     def select_event_by_id(self, eid):
+        """
+        ID로 이벤트를 선택합니다.
+
+        매개변수:
+            eid: 선택할 이벤트 ID
+        """
         for row in range(self.event_table.rowCount()):
             if self.event_table.item(row, 0).data(Qt.ItemDataRole.UserRole) == eid:
                 self.event_table.selectRow(row)
                 break
 
     def on_table_selection_changed(self):
+        """
+        테이블 선택 변경 시 호출됩니다.
+
+        선택된 행의 이벤트를 편집기에 로드합니다.
+        """
         items = self.event_table.selectedItems()
         if not items:
             self.editor_group.setEnabled(False)
             return
-        
+
         row = items[0].row()
         eid = self.event_table.item(row, 0).data(Qt.ItemDataRole.UserRole)
         self.on_event_selected(eid)
 
     def on_event_selected(self, eid):
+        """
+        이벤트 선택 시 편집기에 데이터를 로드합니다.
+
+        매개변수:
+            eid: 선택된 이벤트 ID
+        """
         evt = next((e for e in current_project.events if e.id == eid), None)
         if not evt: return
         
@@ -379,11 +465,23 @@ class EventScriptPanel(QWidget):
         self.update_ui_state()
 
     def _display_time_as_remaining(self, elapsed_sec):
+        """
+        경과 시간을 남은 시간으로 변환하여 표시합니다.
+
+        매개변수:
+            elapsed_sec: 경과 시간(초)
+        """
         dur = self.get_current_ship_duration()
         rem = max(0, dur - elapsed_sec)
         self.time_input.set_seconds(rem)
 
     def get_current_ship_duration(self):
+        """
+        현재 선택된 선박의 총 항해 시간을 반환합니다.
+
+        반환값:
+            float: 총 항해 시간(초), 미생성 시 0.0
+        """
         sid = self.combo_target.currentData()
         ship = current_project.get_ship_by_idx(sid)
         if ship and ship.is_generated:
@@ -391,17 +489,22 @@ class EventScriptPanel(QWidget):
         return 0.0
 
     def on_time_ref_changed(self):
-        # Convert currently displayed value to the other format
+        """
+        시간 참조 모드 변경 시 호출됩니다.
+
+        경과 시간 ↔ 남은 시간 간 변환을 수행합니다.
+        """
         current_val = self.time_input.get_seconds()
         dur = self.get_current_ship_duration()
-        
-        # If we just switched modes, the value in the box represents the OLD mode's value.
-        # Elapsed + Remaining = Duration
-        # So, NewValue = Duration - OldValue
         new_val = max(0, dur - current_val)
         self.time_input.set_seconds(new_val)
 
     def update_ui_state(self):
+        """
+        트리거/액션 유형에 따라 편집기 UI 상태를 업데이트합니다.
+
+        선택된 트리거/액션에 해당하는 입력 필드만 표시합니다.
+        """
         trig = self.combo_trigger.currentText()
         if trig == "TIME":
             self.set_row_visible(self.combo_time_ref, True)
@@ -454,12 +557,24 @@ class EventScriptPanel(QWidget):
 
 
     def set_row_visible(self, widget, visible):
+        """
+        위젯과 레이블의 가시성을 설정합니다.
+
+        매개변수:
+            widget: 대상 위젯
+            visible: 표시 여부
+        """
         widget.setVisible(visible)
         label = self.editor_group.layout().labelForField(widget)
         if label:
             label.setVisible(visible)
 
     def save_current_event(self):
+        """
+        현재 편집 중인 이벤트를 저장합니다.
+
+        편집기의 값을 이벤트 객체에 반영하고 시나리오와 동기화합니다.
+        """
         if not self.current_event_id: return
         evt = next((e for e in current_project.events if e.id == self.current_event_id), None)
         if not evt: return

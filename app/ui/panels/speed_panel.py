@@ -1,7 +1,22 @@
+"""
+속도 생성기 패널 모듈
+
+이 모듈은 선박의 속도 프로파일을 생성하고 시각화하는 패널을 제공합니다.
+경로점의 목표 속도를 기반으로 초 단위 시계열 데이터를 생성합니다.
+
+클래스:
+    SpeedGeneratorPanel: 속도 생성기 패널
+
+주요 기능:
+    - 선박별 속도 데이터 생성
+    - matplotlib 그래프로 속도 프로파일 시각화
+    - 키프레임 속도 및 출력 속도 비교
+"""
+
 import numpy as np
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QPushButton, QLabel, QTextEdit, 
+    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QPushButton, QLabel, QTextEdit,
     QDoubleSpinBox, QTableWidget, QHeaderView, QTableWidgetItem, QAbstractItemView, QComboBox, QHBoxLayout
 )
 from PyQt6.QtCore import (
@@ -14,10 +29,31 @@ import matplotlib.ticker as ticker
 from app.core.models.project import current_project
 from app.core.geometry import haversine_distance, pixel_to_coords
 
+
 class SpeedGeneratorPanel(QWidget):
+    """
+    선박의 속도 프로파일을 생성하고 시각화하는 패널 클래스입니다.
+
+    좌측에 속도 그래프, 우측에 선박 목록과 컨트롤을 배치합니다.
+
+    시그널:
+        request_generate: 속도 생성 요청 시 발생
+
+    속성:
+        ship_table: 선박 목록 테이블
+        canvas: matplotlib 캔버스
+        ship_idx: 현재 선택된 선박 인덱스
+    """
+
     request_generate = pyqtSignal()
-    
+
     def __init__(self, parent=None):
+        """
+        SpeedGeneratorPanel을 초기화합니다.
+
+        매개변수:
+            parent: 부모 위젯 (기본값: None)
+        """
         super().__init__(parent)
         self.layout = QHBoxLayout(self)
         
@@ -76,6 +112,15 @@ class SpeedGeneratorPanel(QWidget):
         self.ship_idx = None
 
     def format_time(self, seconds):
+        """
+        초를 사람이 읽기 쉬운 형식으로 변환합니다.
+
+        매개변수:
+            seconds: 시간(초)
+
+        반환값:
+            str: 포맷된 시간 문자열 (예: "1d 2h 30m 15.0s")
+        """
         d = int(seconds // 86400)
         h = int((seconds % 86400) // 3600)
         m = int((seconds % 3600) // 60)
@@ -84,8 +129,13 @@ class SpeedGeneratorPanel(QWidget):
         if h > 0: return f"{h}h {m}m {s:.1f}s"
         if m > 0: return f"{m}m {s:.1f}s"
         return f"{s:.1f}s"
-        
+
     def refresh_table(self):
+        """
+        선박 목록 테이블을 새로고침합니다.
+
+        필터 설정에 따라 전체/수동/랜덤 선박을 표시합니다.
+        """
         self.ship_table.blockSignals(True)
         self.ship_table.setRowCount(0)
         
@@ -136,23 +186,39 @@ class SpeedGeneratorPanel(QWidget):
         self.ship_table.blockSignals(False)
 
     def set_ship(self, idx):
+        """
+        표시할 선박을 설정합니다.
+
+        매개변수:
+            idx: 선박 인덱스
+        """
         self.ship_idx = idx
         ship = current_project.get_ship_by_idx(idx)
         if ship:
             self.spin_var.setValue(current_project.settings.speed_variance)
-            # Select row in table
             for row in range(self.ship_table.rowCount()):
                 if self.ship_table.item(row, 1).data(Qt.ItemDataRole.UserRole) == idx:
                     self.ship_table.selectRow(row)
                     break
             self.refresh_graph()
             self.print_log(ship)
-            
+
     def request_generate_click(self):
+        """
+        속도 생성 버튼 클릭 시 호출됩니다.
+
+        분산 설정을 저장하고 생성 요청 시그널을 발생시킵니다.
+        """
         current_project.settings.speed_variance = self.spin_var.value()
         self.request_generate.emit()
 
     def get_selected_ships(self):
+        """
+        체크된 선박들의 인덱스 목록을 반환합니다.
+
+        반환값:
+            list: 선택된 선박 인덱스 목록
+        """
         indices = []
         for row in range(self.ship_table.rowCount()):
             item = self.ship_table.item(row, 0)
@@ -162,6 +228,12 @@ class SpeedGeneratorPanel(QWidget):
         return indices
 
     def on_table_clicked(self, item):
+        """
+        테이블 클릭 시 해당 선박을 선택합니다.
+
+        매개변수:
+            item: 클릭된 테이블 항목
+        """
         row = item.row()
         idx = self.ship_table.item(row, 1).data(Qt.ItemDataRole.UserRole)
         self.set_ship(idx)

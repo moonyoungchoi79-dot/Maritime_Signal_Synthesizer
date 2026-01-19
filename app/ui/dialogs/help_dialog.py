@@ -1,20 +1,45 @@
+"""
+도움말 다이얼로그 모듈
+
+이 모듈은 애플리케이션의 사용자 가이드를 제공하는 다이얼로그를 정의합니다.
+좌측의 토픽 목록과 우측의 상세 내용을 보여주는 구조로 되어 있습니다.
+
+클래스:
+    HelpDialog: 사용자 가이드 다이얼로그
+"""
+
 from PyQt6.QtWidgets import (
     QDialog, QHBoxLayout, QListWidget, QTextBrowser, QFrame
 )
 
 class HelpDialog(QDialog):
+    """
+    사용자 가이드를 표시하는 다이얼로그 클래스입니다.
+
+    QListWidget을 사용하여 도움말 목차를 표시하고,
+    QTextBrowser를 사용하여 선택된 목차의 상세 내용을 HTML 형식으로 표시합니다.
+    """
+
     def __init__(self, parent=None):
+        """
+        HelpDialog를 초기화합니다.
+
+        UI 레이아웃을 구성하고 도움말 데이터를 로드합니다.
+
+        매개변수:
+            parent: 부모 위젯 (기본값: None)
+        """
         super().__init__(parent)
         self.setWindowTitle("User Guide")
         self.resize(1120, 840)
         
         layout = QHBoxLayout(self)
-        self.list = QListWidget()
+        self.list = QListWidget()         # 토픽 목록 위젯
         self.list.setFixedWidth(200)
-        self.content = QTextBrowser()
+        self.content = QTextBrowser()     # 내용 표시 위젯
         self.content.setReadOnly(True)
         
-        line = QFrame()
+        line = QFrame()                   # 구분선
         line.setFrameShape(QFrame.Shape.VLine)
         line.setFrameShadow(QFrame.Shadow.Sunken)
         
@@ -22,6 +47,7 @@ class HelpDialog(QDialog):
         layout.addWidget(line)
         layout.addWidget(self.content)
         
+        # 도움말 데이터 (토픽 제목: HTML 내용)
         self.topics = {
             "Introduction": """
                 
@@ -140,6 +166,14 @@ class HelpDialog(QDialog):
         self.list.setCurrentRow(0)
 
     def show_topic(self, row):
+        """
+        선택된 토픽의 내용을 화면에 표시합니다.
+
+        QListWidget의 행 변경 시그널에 연결되는 슬롯 함수입니다.
+
+        매개변수:
+            row: 선택된 행 인덱스
+        """
         if row < 0: return
         key = self.list.item(row).text()
         self.content.setText(f"<h2>{key}</h2><div>{self.topics[key]}</div>")
