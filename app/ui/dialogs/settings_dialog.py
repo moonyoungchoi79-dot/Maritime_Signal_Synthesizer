@@ -255,7 +255,7 @@ class SettingsDialog(QDialog):
 
         # Camera 탭
         camera_tab = self._create_reception_tab("camera", current_project.settings.camera_reception)
-        self.reception_tabs.addTab(camera_tab, "Camera")
+        self.reception_tabs.addTab(camera_tab, "CAMERA")
 
         # Preview 탭
         preview_tab = self._create_preview_tab()
@@ -336,7 +336,7 @@ class SettingsDialog(QDialog):
         if is_camera:
             spin_p1.setValue(1.0)
             spin_p1.setEnabled(False)
-            spin_p1.setToolTip("Camera p1 is fixed at 1.0 (complete block at d1)")
+            spin_p1.setToolTip("CAMERA p1 is fixed at 1.0 (complete block at d1)")
         else:
             spin_p1.setValue(config.p1)
         spin_p1.valueChanged.connect(lambda v: self._update_preview())
@@ -348,7 +348,7 @@ class SettingsDialog(QDialog):
         if is_camera:
             chk_full_block.setChecked(True)
             chk_full_block.setEnabled(False)
-            chk_full_block.setToolTip("Camera always blocks completely at d >= d1")
+            chk_full_block.setToolTip("CAMERA always blocks completely at d >= d1")
         else:
             chk_full_block.setChecked(config.full_block_at_d1)
         chk_full_block.stateChanged.connect(lambda v: self._update_preview())
@@ -472,7 +472,7 @@ class SettingsDialog(QDialog):
                 'ais': self.preview_plot.plot(pen=pg.mkPen('b', width=2), name='AIS'),
                 'radar': self.preview_plot.plot(pen=pg.mkPen('g', width=2), name='Radar'),
                 'arpa': self.preview_plot.plot(pen=pg.mkPen(color=(255, 165, 0), width=2), name='ARPA'),
-                'camera': self.preview_plot.plot(pen=pg.mkPen('r', width=2), name='Camera'),
+                'camera': self.preview_plot.plot(pen=pg.mkPen('r', width=2), name='CAMERA'),
             }
 
             # 수직선 (현재 거리)
@@ -491,7 +491,7 @@ class SettingsDialog(QDialog):
 
         self.prob_labels = {}
         for key, name in [('ais', 'P_drop(AIS)'), ('radar', 'P_drop(Radar)'),
-                          ('arpa', 'P_drop(ARPA)'), ('camera', 'P_drop(Camera)')]:
+                          ('arpa', 'P_drop(ARPA)'), ('camera', 'P_drop(CAMERA)')]:
             label = QLabel("0.0%")
             label.setMinimumWidth(80)
             prob_layout.addRow(f"{name}:", label)

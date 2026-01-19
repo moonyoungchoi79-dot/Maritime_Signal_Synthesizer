@@ -142,7 +142,7 @@ class TargetInfoDialog(QDialog):
         scroll_layout.addWidget(event_group)
 
         # Panorama view for camera detections
-        pano_group = QGroupBox("Camera Panorama View (-90° to +90°)")
+        pano_group = QGroupBox("CAMERA Panorama View (-90° to +90°)")
         pano_layout = QVBoxLayout(pano_group)
         self.panorama_view = PanoramaView()
         self.panorama_view.setMinimumHeight(120)

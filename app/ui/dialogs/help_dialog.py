@@ -123,7 +123,7 @@ class HelpDialog(QDialog):
                 </ul>
                 
                 <h3>신호 제어 (Signal Control)</h3>
-                <p>각 선박별로 발신할 신호 종류(AIVDM, RATTM, Camera)를 켜거나 끌 수 있으며, 발신 주기를 개별적으로 설정할 수 있습니다.</p>
+                <p>각 선박별로 발신할 신호 종류(AIVDM, RATTM, CAMERA)를 켜거나 끌 수 있으며, 발신 주기를 개별적으로 설정할 수 있습니다.</p>
             """,
             "Event Scripter": """
                 
