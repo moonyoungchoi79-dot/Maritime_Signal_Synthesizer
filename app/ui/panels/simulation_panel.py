@@ -31,7 +31,7 @@ from PyQt6.QtWidgets import (
     QHeaderView, QGroupBox, QFileDialog, QDialog, QGraphicsScene, QListWidget,
     QGraphicsItem, QGraphicsPathItem, QGraphicsPolygonItem, QGraphicsEllipseItem,
     QGraphicsTextItem, QAbstractSpinBox, QMenu, QGraphicsRectItem, QFormLayout, QInputDialog, QTabWidget,
-    QGridLayout, QScrollArea, QSplitter
+    QGridLayout, QScrollArea, QSplitter, QProgressDialog
 )
 from PyQt6.QtCore import (
     Qt, pyqtSignal, QThread, QTimer, QPoint, QPointF, QRect, QSize
@@ -49,6 +49,7 @@ from app.core.utils import sanitize_filename
 from app.core.geometry import coords_to_pixel, pixel_to_coords, normalize_lon, great_circle_path_pixels
 from app.core.nmea import parse_nmea_fields
 from app.workers.simulation_worker import SimulationWorker
+from app.workers.rtg_worker import RTGWorker
 from app.ui.map.sim_map_view import SimMapView
 from app.ui.dialogs.rtg_dialog import RTGDialog
 from app.ui.widgets.time_input_widget import TimeInputWidget
@@ -781,6 +782,9 @@ class SimulationPanel(QWidget):
         self.highlighted_ship_idx = -1
         self.worker = None
         self.worker_thread = None
+        self.rtg_worker = None
+        self.rtg_thread = None
+        self.rtg_progress = None
         self.is_paused = False
         self.data_ready_flag = False
         self.suppress_close_warning = False
@@ -806,21 +810,149 @@ class SimulationPanel(QWidget):
 
     def action_random_target_generate(self):
         dlg = RTGDialog(self)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            data = dlg.get_data()
-            area_id = data.get("area_id", -1)
-            R = data["R"]
-            ship_class = data.get("ship_class", "CONTAINER")
-            N_AI_only = data["N_AI_only"]
-            N_RA_only = data["N_RA_only"]
-            N_both = data["N_both"]
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
 
-            own_ship = current_project.get_ship_by_idx(current_project.settings.own_ship_idx)
-            if not own_ship:
-                msgbox.show_warning(self, "Warning", "Own Ship is not set. Cannot generate random targets.")
-                return
+        data = dlg.get_data()
+        area_id = data.get("area_id", -1)
+        R = data["R"]
+        ship_class = data.get("ship_class", "CONTAINER")
+        N_AI_only = data["N_AI_only"]
+        N_RA_only = data["N_RA_only"]
+        N_both = data["N_both"]
 
-            self.generate_random_targets_logic(own_ship, R, N_AI_only, N_RA_only, N_both, area_id, ship_class)
+        own_ship = current_project.get_ship_by_idx(current_project.settings.own_ship_idx)
+        if not own_ship:
+            msgbox.show_warning(self, "Warning", "Own Ship is not set. Cannot generate random targets.")
+            return
+
+        if self.rtg_thread:
+            self._cleanup_rtg_worker()
+
+        own_lat, own_lon, own_spd_kn = 0.0, 0.0, 0.0
+        mi = current_project.map_info
+
+        if self.worker and self.worker.running and own_ship.idx in self.worker.dynamic_ships:
+            dyn = self.worker.dynamic_ships[own_ship.idx]
+            from app.core.geometry import ecef_to_lla
+            own_lat, own_lon, _ = ecef_to_lla(dyn["x"], dyn["y"], dyn["z"])
+            own_spd_kn = dyn["spd"]
+        elif own_ship.resampled_points:
+            px, py = own_ship.resampled_points[0]
+            _, _, own_lat, own_lon = pixel_to_coords(px, py, mi)
+            own_spd_kn = own_ship.raw_speeds.get(0, 5.0)
+
+        area_points = None
+        if area_id != -1:
+            area = current_project.get_area_by_id(area_id)
+            if area and area.geometry:
+                area_points = list(area.geometry)
+
+        seed_val = (current_project.seed + len(current_project.ships)) % (2**32 - 1)
+        existing_idxs = {s.idx for s in current_project.ships}
+        existing_names = {s.name for s in current_project.ships}
+
+        total_targets = N_AI_only + N_RA_only + N_both
+        self.rtg_progress = QProgressDialog(
+            f"Generating {total_targets} random targets...", "Cancel", 0, total_targets, self
+        )
+        self.rtg_progress.setWindowTitle("Random Target Generation")
+        self.rtg_progress.setWindowModality(Qt.WindowModality.WindowModal)
+        self.rtg_progress.setMinimumDuration(0)
+        self.rtg_progress.setValue(0)
+
+        self.rtg_thread = QThread()
+        self.rtg_worker = RTGWorker(
+            own_lat=own_lat,
+            own_lon=own_lon,
+            own_spd_kn=own_spd_kn,
+            R_nm=R,
+            N_ai=N_AI_only,
+            N_ra=N_RA_only,
+            N_both=N_both,
+            ship_class=ship_class,
+            map_info=mi,
+            seed_val=seed_val,
+            speed_variance=current_project.settings.speed_variance,
+            existing_idxs=existing_idxs,
+            existing_names=existing_names,
+            area_points=area_points,
+        )
+        self.rtg_worker.moveToThread(self.rtg_thread)
+
+        self.rtg_thread.started.connect(self.rtg_worker.run)
+        self.rtg_worker.progress.connect(self._on_rtg_progress)
+        self.rtg_worker.finished.connect(self._on_rtg_finished)
+        self.rtg_worker.error.connect(self._on_rtg_error)
+        self.rtg_progress.canceled.connect(self._on_rtg_cancel)
+
+        self.rtg_thread.start()
+
+    def _on_rtg_progress(self, current: int, total: int):
+        if self.rtg_progress:
+            self.rtg_progress.setValue(current)
+
+    def _on_rtg_finished(self, ships: list):
+        for ship in ships:
+            current_project.ships.append(ship)
+
+        self.refresh_tables()
+        self.draw_static_map()
+
+        if self.worker and self.worker.running:
+            pos_dict = self.last_pos_dict.copy()
+            t_restore = self.worker.current_time
+            mi = current_project.map_info
+
+            for s in current_project.ships:
+                if not s.is_generated:
+                    continue
+                if s.idx in pos_dict and s.idx in self.worker.dynamic_ships:
+                    continue
+
+                st = self.calculate_ship_state(s, t_restore)
+                px, py = coords_to_pixel(st["lat"], st["lon"], mi)
+                pos_dict[s.idx] = (px, py, st["hdg"], st["spd"])
+
+            self.update_positions(pos_dict)
+
+        if self.window():
+            self.window().update_obj_combo()
+            self.window().redraw_map()
+            if hasattr(self.window(), "data_changed"):
+                self.window().data_changed.emit()
+
+        if self.worker and self.worker.running:
+            self.worker.refresh_active_ships()
+
+        if ships:
+            self.append_log(f"[RTG] {len(ships)} random targets generated.")
+
+        self._cleanup_rtg_worker()
+
+    def _on_rtg_error(self, msg: str):
+        self._cleanup_rtg_worker()
+        msgbox.show_warning(self, "Error", f"Random target generation failed:\n{msg}")
+
+    def _on_rtg_cancel(self):
+        if self.rtg_worker:
+            self.rtg_worker.cancel()
+        self._cleanup_rtg_worker()
+
+    def _cleanup_rtg_worker(self):
+        if self.rtg_progress:
+            self.rtg_progress.close()
+            self.rtg_progress = None
+
+        if self.rtg_thread:
+            self.rtg_thread.quit()
+            self.rtg_thread.wait()
+            self.rtg_thread.deleteLater()
+            self.rtg_thread = None
+
+        if self.rtg_worker:
+            self.rtg_worker.deleteLater()
+            self.rtg_worker = None
 
     def action_clear_random_targets(self):
         targets = [s for s in current_project.ships if s.idx >= 1000]
@@ -1768,6 +1900,8 @@ class SimulationPanel(QWidget):
         scale = self.view.transform().m11()
         if scale <= 0: scale = 1.0
 
+        show_paths = self.chk_show_paths.isChecked()
+
         for ship in current_project.ships:
              if not ship.raw_points: continue 
              
@@ -1788,7 +1922,9 @@ class SimulationPanel(QWidget):
 
              # 대권항로로 보간된 경로 점 생성
              mi = current_project.map_info
-             gc_pts = great_circle_path_pixels(ship.raw_points, mi, points_per_segment=30)
+             gc_pts = []
+             if show_paths and not is_random:
+                 gc_pts = great_circle_path_pixels(ship.raw_points, mi, points_per_segment=30)
              threshold = 180 * mi.pixels_per_degree
 
              if gc_pts:
@@ -1816,9 +1952,9 @@ class SimulationPanel(QWidget):
              path.setPen(pen)
              
              # [Modified] Show dotted path (Planned Path) only for non-random targets
-             if self.chk_show_paths.isChecked() and not is_random:
+             if show_paths and not is_random:
                  self.scene.addItem(path)
-             self.planned_paths[ship.idx] = path
+                 self.planned_paths[ship.idx] = path
              
              heading = 0.0
              if len(ship.raw_points) > 1:
@@ -1827,6 +1963,8 @@ class SimulationPanel(QWidget):
                  dx = p2[0] - p1[0]
                  dy = p2[1] - p1[1]
                  heading = math.degrees(math.atan2(dx, -dy))
+             elif ship.initial_heading is not None:
+                 heading = ship.initial_heading
              
              s = 8.0
              s_half = s / 2.0
@@ -1908,7 +2046,7 @@ class SimulationPanel(QWidget):
                  tf.setZValue(3)
 
                  # [Modified] Show i, f markers only for non-random targets
-                 if self.chk_show_paths.isChecked() and not is_random:
+                 if show_paths and not is_random:
                      self.scene.addItem(ti)
                      self.scene.addItem(tf)
 
@@ -2543,6 +2681,8 @@ class SimulationPanel(QWidget):
                 d_lon = (lon2 - lon) * math.cos(math.radians((lat+lat2)/2))
                 hdg = math.degrees(math.atan2(d_lon, d_lat))
                 hdg = (hdg + 360) % 360
+            elif ship.initial_heading is not None:
+                hdg = ship.initial_heading
             
             return {'lat': lat, 'lon': lon, 'spd': ship.raw_speeds.get(0, 0.0), 'hdg': hdg}
             

@@ -331,7 +331,7 @@ class SimulationWindow(QWidget):
 
     def generate_random_targets_logic(self, own_ship, R_nm, N_ai, N_ra, N_both, ship_class="CONTAINER"):
         """
-        랜덤 타겟 생성 로직을 수행합니다.
+        랜덤 타겟 생성 로직 (최적화: 시작점만 저장, 벡터 모드로 운용)
 
         매개변수:
             own_ship: 자선(Own Ship) 객체
@@ -347,17 +347,10 @@ class SimulationWindow(QWidget):
         seed_val = (current_project.seed + len(current_project.ships)) % (2**32 - 1)
         random.seed(seed_val)
 
-        # 1. 기준 시간과 상태 결정
-        t_now = 0.0
-        if self.worker and self.worker.running:
-            t_now = self.worker.current_time
-
-        # t_now 시점의 자선 상태 가져오기
+        # 자선 현재 상태 가져오기
         own_lat, own_lon, own_spd_kn = 0.0, 0.0, 0.0
-
         mi = current_project.map_info
 
-        # 가능하면 현재 동적 상태 사용, 그렇지 않으면 시작 위치
         if self.worker and self.worker.running and own_ship.idx in self.worker.dynamic_ships:
             dyn = self.worker.dynamic_ships[own_ship.idx]
             from app.core.geometry import ecef_to_lla
@@ -368,13 +361,11 @@ class SimulationWindow(QWidget):
             _, _, own_lat, own_lon = pixel_to_coords(px, py, mi)
             own_spd_kn = own_ship.raw_speeds.get(0, 5.0)
 
-        # 2. 생성 루프
         total_targets = N_ai + N_ra + N_both
-        mi = current_project.map_info
-
-        # R을 도(degree) 단위로 변환 (근사값)
-        # 1 nm = 1/60 degree lat
         R_deg_lat = R_nm / 60.0
+
+        existing_idxs = {s.idx for s in current_project.ships}
+        existing_names = {s.name for s in current_project.ships}
 
         for i in range(total_targets):
             # 타입 결정
@@ -390,7 +381,6 @@ class SimulationWindow(QWidget):
             theta = random.random() * 2 * math.pi
 
             d_lat = r * math.cos(theta)
-            # 위도에 따른 경도 조정 (cos 팩터)
             cos_lat = math.cos(math.radians(own_lat))
             if abs(cos_lat) < 0.01:
                 cos_lat = 0.01
@@ -398,80 +388,45 @@ class SimulationWindow(QWidget):
 
             start_lat = own_lat + d_lat
             start_lon = own_lon + d_lon
-
-            # 시작 위도 클램핑
             start_lat = max(-89.9, min(89.9, start_lat))
 
-            # 속도 모델 (바람/해류 효과를 위한 통합 분산)
+            # 속도 모델
             variance = current_project.settings.speed_variance
             sigma = math.sqrt(variance)
             spd = abs(random.gauss(own_spd_kn, sigma))
             if spd < 0.1:
                 spd = 0.1
 
-            # 운동 모델 (직선)
+            # 운동 모델 (직선) - 헤딩 생성
             heading = random.random() * 360.0
 
-            # t_now부터 자선 종료까지 경로 생성
-            duration_remaining = 24 * 3600.0
-
-            # 직선 경로 생성
-            raw_pixels = []
-            curr_lat, curr_lon = start_lat, start_lon
-            curr_heading = heading
-
+            # 시작점만 픽셀 좌표로 변환 (전체 경로 생성 안함!)
             px_start, py_start = coords_to_pixel(start_lat, start_lon, mi)
-            raw_pixels.append((px_start, py_start))
-
-            dt = 1.0  # 1초 간격
-            steps = int(duration_remaining / dt)
-
-            # 속도 성분 (노트 -> 도/초)
-            dist_per_sec_deg = (spd / 3600.0) / 60.0
-
-            d_lat_step = dist_per_sec_deg * math.cos(math.radians(curr_heading)) * dt
-            d_lon_step_base = dist_per_sec_deg * math.sin(math.radians(curr_heading)) * dt
-
-            for _ in range(steps):
-                curr_lat += d_lat_step
-                if curr_lat > 89.9:
-                    curr_lat = 89.9
-                elif curr_lat < -89.9:
-                    curr_lat = -89.9
-
-                cos_lat = math.cos(math.radians(curr_lat))
-                if abs(cos_lat) < 0.01:
-                    cos_lat = 0.01
-
-                d_lon_step = d_lon_step_base / cos_lat
-                curr_lon += d_lon_step
-
-                px, py = coords_to_pixel(curr_lat, curr_lon, mi)
-                raw_pixels.append((px, py))
 
             # 선박 객체 생성
-            # 1. >= 1000인 고유 인덱스 찾기
             new_idx = 1001
-            existing_idxs = {s.idx for s in current_project.ships}
             while new_idx in existing_idxs:
                 new_idx += 1
+            existing_idxs.add(new_idx)
 
-            # 2. "Random-{N}" 명명을 위한 고유 번호 찾기
             r_num = 1
-            existing_names = {s.name for s in current_project.ships}
             while f"Random-{r_num}" in existing_names:
                 r_num += 1
+            existing_names.add(f"Random-{r_num}")
 
             new_ship = ShipData(new_idx, f"Random-{r_num}")
             new_ship.mmsi = random.randint(100000000, 999999999)
             new_ship.is_generated = True
+            new_ship.is_random_target = True
 
-            # 원시 데이터 채우기 (저장 및 편집에 필수)
-            new_ship.raw_points = raw_pixels
+            # 시작점 1개만 저장 (벡터 모드용)
+            new_ship.raw_points = [(px_start, py_start)]
             new_ship.raw_speeds = {0: spd}
+            new_ship.resampled_points = [(px_start, py_start)]
 
-            # 시뮬레이션 데이터 채우기
-            new_ship.resampled_points = raw_pixels
+            # 초기 헤딩 저장 (시뮬레이션 워커에서 벡터 모드로 사용)
+            new_ship.initial_heading = heading
+            new_ship.manual_heading = heading
 
             # 선박 클래스 및 치수 설정
             new_ship.ship_class = ship_class
@@ -480,7 +435,7 @@ class SimulationWindow(QWidget):
             new_ship.beam_m = dims[1]
             new_ship.draft_m = dims[2]
             new_ship.air_draft_m = dims[3]
-            new_ship.height_m = dims[3] * 0.5  # 가시 높이 = 에어 드래프트의 절반
+            new_ship.height_m = dims[3] * 0.5
 
             # 신호 설정
             if s_type == "AI":
@@ -498,7 +453,7 @@ class SimulationWindow(QWidget):
 
             current_project.ships.append(new_ship)
 
-        # 4. 실시간 업데이트
+        # 실시간 업데이트
         self.refresh_tables()
         self.draw_static_map()
 
@@ -506,16 +461,15 @@ class SimulationWindow(QWidget):
         if self.worker:
             t_restore = self.worker.current_time
             pos_dict = {}
-            mi = current_project.map_info
             for s in current_project.ships:
-                if not s.is_generated:
+                if not s.is_random_target:
                     continue
                 st = self.calculate_ship_state(s, t_restore)
                 px, py = coords_to_pixel(st['lat'], st['lon'], mi)
                 pos_dict[s.idx] = (px, py, st['hdg'])
             self.update_positions(pos_dict)
 
-        # 메인 윈도우 업데이트 (콤보박스 및 지도)
+        # 메인 윈도우 업데이트
         if self.window():
             self.window().update_obj_combo()
             self.window().redraw_map()
