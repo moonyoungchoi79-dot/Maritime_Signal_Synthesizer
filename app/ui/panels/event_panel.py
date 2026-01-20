@@ -168,7 +168,9 @@ class EventScriptPanel(QWidget):
         splitter.addWidget(self.editor_group)
 
         splitter.setHandleWidth(10)
-        splitter.setSizes([400, 600])
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 3)
+        splitter.setSizes([1, 3])
         layout.addWidget(splitter)
 
         scroll.setWidget(scroll_content)

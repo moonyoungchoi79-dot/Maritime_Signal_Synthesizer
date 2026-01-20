@@ -267,7 +267,9 @@ class ScenarioPanel(QWidget):
         splitter.addWidget(right_widget)
 
         splitter.setHandleWidth(10)
-        splitter.setSizes([300, 900])
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 3)
+        splitter.setSizes([1, 3])
         main_layout.addWidget(splitter)
 
         scroll.setWidget(scroll_content)

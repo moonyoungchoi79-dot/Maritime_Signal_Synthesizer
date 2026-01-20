@@ -1065,6 +1065,7 @@ class SimulationPanel(QWidget):
         splitter.addWidget(right_scroll)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 1)
+        splitter.setSizes([3, 1])
         mid_layout.addWidget(splitter)
         layout.addWidget(mid_widget)
         
