@@ -43,7 +43,14 @@ from app.core.geometry import (
     lla_to_ecef, ecef_to_lla, ecef_distance, ecef_move, ecef_heading,
     ecef_interpolate, path_points_to_ecef
 )
-from app.core.nmea import calculate_checksum, encode_ais_payload
+from app.core.nmea import calculate_checksum
+
+# pyais를 사용한 AIS 인코딩
+try:
+    from pyais.encode import encode_dict
+    PYAIS_AVAILABLE = True
+except ImportError:
+    PYAIS_AVAILABLE = False
 
 # 파노라마 뷰 상수 (사양 B-3 기준)
 PANO_W_PX = 1920  # 파노라마 이미지 너비 (픽셀)
@@ -287,23 +294,37 @@ class SimulationWorker(QObject):
                 _, _, start_lat, start_lon = pixel_to_coords(start_px, start_py, mi)
                 x, y, z = lla_to_ecef(start_lat, start_lon, 0.0)
 
-                # 랜덤 선박 (idx >= 1000)은 경로 생성 없이 벡터 모드 사용 (최적화)
-                if s.idx >= 1000:
-                    # 랜덤 초기 방향 (0 ~ 360도)
-                    init_hdg = s_rng.uniform(0.0, 360.0)
+                # 랜덤 선박 (idx >= 1000) 또는 Single Point + Heading 모드 선박은
+                # 경로 생성 없이 벡터 모드 사용 (대권항로로 직진)
+                if s.idx >= 1000 or s.initial_heading is not None:
+                    # 랜덤 선박: 랜덤 초기 방향 (0 ~ 360도)
+                    # Single Point + Heading: 사용자 지정 헤딩 사용
+                    if s.initial_heading is not None:
+                        init_hdg = s.initial_heading
+                    else:
+                        init_hdg = s_rng.uniform(0.0, 360.0)
+                    init_spd = s.raw_speeds.get(0, 5.0)
+
+                    # ShipData의 수동 설정값 반영
+                    if s.manual_speed is not None:
+                        init_spd = s.manual_speed
+                    if s.manual_heading is not None:
+                        init_hdg = s.manual_heading
+
                     self.dynamic_ships[s.idx] = {
                         'x': x, 'y': y, 'z': z,
-                        'spd': s.raw_speeds.get(0, 5.0),
-                        'sog': s.raw_speeds.get(0, 5.0),
+                        'spd': init_spd,
+                        'sog': init_spd,
                         'hdg': init_hdg,
                         'dist_traveled': 0.0,
                         'path_segment_idx': 0,
                         'ecef_path': [],
                         'cum_dists': [],
                         'total_path_len': 0.0,
-                        'following_path': False,  # 벡터 모드
-                        'manual_speed': False,
-                        'manual_heading': False,
+                        'following_path': False,  # 벡터 모드 (대권항로 직진)
+                        'manual_speed': s.manual_speed is not None,
+                        'manual_heading': s.manual_heading is not None or s.initial_heading is not None,
+                        'fix_heading': s.fix_heading,
                         'mode': None,
                         'rng': s_rng,
                         'target_recovery_idx': -1,
@@ -320,19 +341,33 @@ class SimulationWorker(QObject):
                         tx, ty, tz = ecef_path[1]
                         init_hdg = ecef_heading(x, y, z, tx, ty, tz)
 
+                    init_spd = s.raw_speeds.get(0, 5.0)
+
+                    # ShipData의 수동 설정값 반영
+                    has_manual_spd = s.manual_speed is not None
+                    has_manual_hdg = s.manual_heading is not None
+                    if has_manual_spd:
+                        init_spd = s.manual_speed
+                    if has_manual_hdg:
+                        init_hdg = s.manual_heading
+
+                    # fix_heading이 활성화되면 경로 추종 비활성화
+                    follow_path = not (s.fix_heading or has_manual_hdg)
+
                     self.dynamic_ships[s.idx] = {
                         'x': x, 'y': y, 'z': z,
-                        'spd': s.raw_speeds.get(0, 5.0),
-                        'sog': s.raw_speeds.get(0, 5.0),
+                        'spd': init_spd,
+                        'sog': init_spd,
                         'hdg': init_hdg,
                         'dist_traveled': 0.0,
                         'path_segment_idx': 0,
                         'ecef_path': ecef_path,
                         'cum_dists': cum_dists,
                         'total_path_len': total_len,
-                        'following_path': True,
-                        'manual_speed': False,
-                        'manual_heading': False,
+                        'following_path': follow_path,
+                        'manual_speed': has_manual_spd,
+                        'manual_heading': has_manual_hdg or s.fix_heading,
+                        'fix_heading': s.fix_heading,
                         'mode': None,
                         'rng': s_rng,
                         'target_recovery_idx': -1,
@@ -494,11 +529,18 @@ class SimulationWorker(QObject):
 
             # 랜덤 방향 생성 (0 ~ 360도)
             init_hdg = s_rng.uniform(0.0, 360.0)
+            init_spd = s.raw_speeds.get(0, 5.0)
+
+            # ShipData의 수동 설정값 반영
+            if s.manual_speed is not None:
+                init_spd = s.manual_speed
+            if s.manual_heading is not None:
+                init_hdg = s.manual_heading
 
             self.dynamic_ships[s.idx] = {
                 'x': x, 'y': y, 'z': z,
-                'spd': s.raw_speeds.get(0, 5.0),
-                'sog': 5.0,
+                'spd': init_spd,
+                'sog': init_spd,
                 'hdg': init_hdg,
                 'dist_traveled': 0.0,
                 'path_segment_idx': 0,
@@ -506,8 +548,9 @@ class SimulationWorker(QObject):
                 'cum_dists': [],
                 'total_path_len': 0.0,
                 'following_path': False,  # 경로 추종 비활성화 (벡터 모드)
-                'manual_speed': False,
-                'manual_heading': False,
+                'manual_speed': s.manual_speed is not None,
+                'manual_heading': s.manual_heading is not None,
+                'fix_heading': s.fix_heading,
                 'mode': None,
                 'rng': s_rng,
                 'target_recovery_idx': -1,
@@ -603,6 +646,27 @@ class SimulationWorker(QObject):
             self.dynamic_ships[ship_idx]['following_path'] = False
             ship = self.proj.get_ship_by_idx(ship_idx)
             self.log_message.emit(f"[Manual] Heading changed for {ship.name if ship else ship_idx} to {heading_deg} deg")
+
+    def set_fix_heading(self, ship_idx, is_fixed):
+        """
+        특정 선박의 헤딩 고정 모드를 설정합니다.
+
+        헤딩 고정 모드에서는 대권항로 대신 일정한 헤딩(Rhumb Line)으로 이동합니다.
+
+        매개변수:
+            ship_idx: 선박 인덱스
+            is_fixed: 헤딩 고정 여부 (True: 고정, False: 대권항로)
+        """
+        if ship_idx in self.dynamic_ships:
+            dyn = self.dynamic_ships[ship_idx]
+            dyn['fix_heading'] = is_fixed
+            if is_fixed:
+                # 헤딩 고정 활성화 시 현재 헤딩 유지, 경로 추종 비활성화
+                dyn['following_path'] = False
+                dyn['manual_heading'] = True
+            ship = self.proj.get_ship_by_idx(ship_idx)
+            mode_str = "Fixed Heading (Rhumb Line)" if is_fixed else "Great Circle Path"
+            self.log_message.emit(f"[Manual] {ship.name if ship else ship_idx} mode: {mode_str}")
 
     def _calculate_ecef_velocity(self, lat, lon, spd_kn, hdg_deg):
         """
@@ -1029,14 +1093,20 @@ class SimulationWorker(QObject):
             dyn['hdg'] = ecef_heading(dyn['x'], dyn['y'], dyn['z'], x2, y2, z2)
 
         else:
-            # --- VECTOR MODE (대권항법 자유 항해) ---
+            # --- VECTOR MODE ---
             if move_dist_m > 0:
                 lat, lon, _ = ecef_to_lla(dyn['x'], dyn['y'], dyn['z'])
-                # 현재 방향으로 대권 이동 -> 위치 변화에 따라 방향 자동 업데이트
-                nlat, nlon, nhdg = self._move_great_circle_step(lat, lon, dyn['hdg'], move_dist_m)
 
-                dyn['x'], dyn['y'], dyn['z'] = lla_to_ecef(nlat, nlon, 0.0)
-                dyn['hdg'] = nhdg
+                if dyn.get('fix_heading'):
+                    # 헤딩 고정 모드: Rhumb Line (등각항로) 이동, 헤딩 유지
+                    nlat, nlon = self._move_rhumb_line_step(lat, lon, dyn['hdg'], move_dist_m)
+                    dyn['x'], dyn['y'], dyn['z'] = lla_to_ecef(nlat, nlon, 0.0)
+                    # 헤딩은 변경하지 않음 (고정)
+                else:
+                    # 일반 벡터 모드: 대권항법 자유 항해, 위치 변화에 따라 방향 자동 업데이트
+                    nlat, nlon, nhdg = self._move_great_circle_step(lat, lon, dyn['hdg'], move_dist_m)
+                    dyn['x'], dyn['y'], dyn['z'] = lla_to_ecef(nlat, nlon, 0.0)
+                    dyn['hdg'] = nhdg
 
         # 4. 결과 반환
         lat, lon, _ = ecef_to_lla(dyn['x'], dyn['y'], dyn['z'])
@@ -1049,6 +1119,61 @@ class SimulationWorker(QObject):
         lon = normalize_lon(lon)
 
         return self._make_state_result(lat, lon, current_speed_kn, dyn['hdg'])
+
+    def _move_rhumb_line_step(self, lat, lon, hdg_deg, dist_m):
+        """
+        현재 위치에서 등각항로(Rhumb Line)로 이동합니다.
+
+        등각항로는 일정한 방위각을 유지하며 이동하는 항법입니다.
+        대권항로와 달리 헤딩이 변하지 않습니다.
+
+        매개변수:
+            lat: 현재 위도 (도)
+            lon: 현재 경도 (도)
+            hdg_deg: 고정 방향 (도)
+            dist_m: 이동 거리 (미터)
+
+        반환값:
+            (new_lat, new_lon) 튜플
+        """
+        R = 6371000.0  # 지구 반지름
+        lat_rad = math.radians(lat)
+        lon_rad = math.radians(lon)
+        hdg_rad = math.radians(hdg_deg)
+
+        # 이동 거리를 각도로 변환
+        delta = dist_m / R
+
+        # 위도 변화량
+        d_lat = delta * math.cos(hdg_rad)
+        new_lat_rad = lat_rad + d_lat
+
+        # 위도 클리핑
+        if new_lat_rad > math.radians(89.9):
+            new_lat_rad = math.radians(89.9)
+        elif new_lat_rad < math.radians(-89.9):
+            new_lat_rad = math.radians(-89.9)
+
+        # 경도 변화량 (Mercator 투영 기반)
+        # dPsi = ln(tan(pi/4 + lat2/2) / tan(pi/4 + lat1/2))
+        def mercator_lat(lat_r):
+            return math.log(math.tan(math.pi/4 + lat_r/2))
+
+        d_psi = mercator_lat(new_lat_rad) - mercator_lat(lat_rad)
+
+        if abs(d_psi) > 1e-12:
+            q = d_lat / d_psi
+        else:
+            # 거의 동서 방향으로 이동하는 경우 (d_psi ≈ 0)
+            q = math.cos(lat_rad)
+
+        d_lon = delta * math.sin(hdg_rad) / q
+        new_lon_rad = lon_rad + d_lon
+
+        new_lat = math.degrees(new_lat_rad)
+        new_lon = normalize_lon(math.degrees(new_lon_rad))
+
+        return new_lat, new_lon
 
     def _move_great_circle_step(self, lat, lon, hdg_deg, dist_m):
         """
@@ -1356,10 +1481,10 @@ class SimulationWorker(QObject):
 
     def gen_ais_multi(self, base, state, stype, mmsi):
         """
-        AIS 메시지를 생성합니다 (멀티 프래그먼트 지원).
+        pyais를 사용하여 AIS 메시지를 생성합니다.
 
-        AIVDM Message Type 1 (Class A Position Report)을 생성합니다.
-        실제 선박 상태 정보(위치, 속도, 방향)를 인코딩합니다.
+        pyais가 페이로드 길이에 따라 결정론적으로 fragment를 분할합니다.
+        각 fragment는 설정된 전달 확률에 따라 전달/유실됩니다.
 
         매개변수:
             base: 기본 행 데이터
@@ -1368,18 +1493,9 @@ class SimulationWorker(QObject):
             mmsi: MMSI 번호
 
         반환값:
-            AIS 메시지 목록
+            전달된 AIS 메시지 목록 (유실된 fragment는 제외)
         """
-        probs = current_project.settings.ais_fragment_probs
-        total_prob = sum(probs)
-        if total_prob == 0:
-            total_fragments = 1
-        else:
-            normalized_probs = [p / total_prob for p in probs]
-            total_fragments = random.choices(range(1, 6), weights=normalized_probs, k=1)[0]
-
         # 실제 선박 상태 정보를 사용하여 AIS 페이로드 인코딩
-        # state 딕셔너리에서 필요한 값 추출
         lat_deg = state.get('lat_deg', 0.0)
         lon_deg = state.get('lon_deg', 0.0)
         sog_knots = state.get('sog_knots', 0.0)
@@ -1388,7 +1504,71 @@ class SimulationWorker(QObject):
 
         # 타임스탬프에서 UTC 초 추출
         rx_time = base.get('rx_time')
-        utc_second = rx_time.second if rx_time else None
+        utc_second = rx_time.second if rx_time else 0
+
+        if PYAIS_AVAILABLE:
+            # pyais를 사용한 인코딩
+            # pyais는 페이로드가 60자를 초과하면 자동으로 여러 NMEA 문장으로 분할
+            data = {
+                'type': 1,  # Message Type 1: Class A Position Report
+                'mmsi': str(mmsi),
+                'status': 0,  # 0 = 항해 중 (엔진 사용)
+                'turn': 0,    # 0 = 선회 안함
+                'speed': sog_knots,
+                'accuracy': True,  # High accuracy (<10m)
+                'lon': lon_deg,
+                'lat': lat_deg,
+                'course': cog_deg,
+                'heading': int(heading_deg) if heading_deg is not None and heading_deg >= 0 else 511,
+                'second': utc_second,
+                'maneuver': 0,  # 0 = 특수 기동 없음
+                'raim': False,
+            }
+
+            try:
+                # encode_dict는 리스트를 반환 (멀티 파트 메시지 지원)
+                all_fragments = encode_dict(data, talker_id="AIVDM")
+
+                # 각 fragment에 대해 전달 확률 적용
+                delivery_prob = current_project.settings.ais_fragment_delivery_prob
+                delivered_fragments = []
+
+                for fragment in all_fragments:
+                    # 전달 확률에 따라 fragment 전달/유실 결정
+                    if random.random() < delivery_prob:
+                        delivered_fragments.append(fragment)
+
+                return delivered_fragments
+
+            except Exception as e:
+                # pyais 인코딩 실패 시 폴백
+                self.log_message.emit(f"[Warning] pyais encoding failed: {e}, using fallback")
+                return self._gen_ais_fallback(base, state, stype, mmsi, utc_second)
+        else:
+            # pyais가 없을 경우 폴백
+            return self._gen_ais_fallback(base, state, stype, mmsi, utc_second)
+
+    def _gen_ais_fallback(self, base, state, stype, mmsi, utc_second):
+        """
+        pyais가 없거나 실패할 경우 기존 방식으로 AIS 메시지 생성.
+
+        매개변수:
+            base: 기본 행 데이터
+            state: 상태 딕셔너리
+            stype: AIS 타입
+            mmsi: MMSI 번호
+            utc_second: UTC 초
+
+        반환값:
+            AIS 메시지 목록
+        """
+        from app.core.nmea import encode_ais_payload
+
+        lat_deg = state.get('lat_deg', 0.0)
+        lon_deg = state.get('lon_deg', 0.0)
+        sog_knots = state.get('sog_knots', 0.0)
+        cog_deg = state.get('cog_true_deg', 0.0)
+        heading_deg = state.get('heading_true_deg', 0.0)
 
         payload = encode_ais_payload(
             mmsi=mmsi,
@@ -1397,25 +1577,20 @@ class SimulationWorker(QObject):
             sog_knots=sog_knots,
             cog_deg=cog_deg,
             heading_deg=heading_deg,
-            nav_status=0,  # 0 = 항해 중 (엔진 사용)
-            rot=0,         # 0 = 선회 안함
+            nav_status=0,
+            rot=0,
             utc_second=utc_second
         )
-        fragment_min_len = 1
-        fragment_length = max(fragment_min_len, math.ceil(len(payload) / total_fragments))
 
-        ais_messages = []
-        seq_id = random.randint(0, 9)
+        # 단일 메시지 생성 (폴백에서는 분할하지 않음)
+        raw = f"!AI{stype},1,1,,A,{payload},0"
+        msg = f"{raw}*{calculate_checksum(raw[1:])}"
 
-        for i in range(total_fragments):
-            start_idx = i * fragment_length
-            end_idx = min(len(payload), (i + 1) * fragment_length)
-            fragment = payload[start_idx:end_idx]
-            raw = f"!AI{stype},{total_fragments},{i+1},{seq_id},A,{fragment},0"
-            msg = f"{raw}*{calculate_checksum(raw[1:])}"
-            ais_messages.append(msg)
-
-        return ais_messages
+        # 전달 확률 적용
+        delivery_prob = current_project.settings.ais_fragment_delivery_prob
+        if random.random() < delivery_prob:
+            return [msg]
+        return []
 
     def gen_ttm(self, base, state):
         """

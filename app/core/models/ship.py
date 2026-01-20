@@ -138,6 +138,15 @@ class ShipData:
     air_draft_m: float = 60.0  # 공기흘수 (미터)
     height_m: float = 30.0  # 가시 높이 (미터) - 카메라 탐지용
 
+    # 수동 제어 설정 (Manual Ship Control)
+    manual_speed: Optional[float] = None  # 수동 설정된 속도 (노트), None이면 경로 기반
+    manual_heading: Optional[float] = None  # 수동 설정된 헤딩 (도), None이면 경로 기반
+    fix_heading: bool = False  # 헤딩 고정 모드 (True: 일정 헤딩 유지, False: 대권항로 따름)
+
+    # Single Point + Heading 모드 설정
+    # 점 하나와 초기 헤딩만으로 정의된 선박 (시뮬레이션 시 대권항로로 이동)
+    initial_heading: Optional[float] = None  # 초기 헤딩 (도), None이면 일반 경로 모드
+
     def get_display_segments(self) -> List[List[Tuple[float, float]]]:
         """
         지도 표시용으로 경로를 세그먼트로 분할하여 반환합니다.

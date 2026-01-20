@@ -26,15 +26,15 @@ import re
 import numpy as np
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit,
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, QLayout,
     QTextEdit, QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox, QTableWidget,
     QHeaderView, QGroupBox, QFileDialog, QDialog, QGraphicsScene, QListWidget,
     QGraphicsItem, QGraphicsPathItem, QGraphicsPolygonItem, QGraphicsEllipseItem,
     QGraphicsTextItem, QAbstractSpinBox, QMenu, QGraphicsRectItem, QFormLayout, QInputDialog, QTabWidget,
-    QGridLayout, QScrollArea
+    QGridLayout, QScrollArea, QSplitter
 )
 from PyQt6.QtCore import (
-    Qt, pyqtSignal, QThread, QTimer, QPointF
+    Qt, pyqtSignal, QThread, QTimer, QPoint, QPointF, QRect, QSize
 )
 from PyQt6.QtGui import (
     QColor, QPen, QBrush, QPainterPath, QPolygonF, QFont
@@ -46,7 +46,7 @@ import matplotlib.ticker as ticker
 from app.core.constants import CSV_HEADER
 from app.core.models.project import current_project, ShipData
 from app.core.utils import sanitize_filename
-from app.core.geometry import coords_to_pixel, pixel_to_coords, normalize_lon
+from app.core.geometry import coords_to_pixel, pixel_to_coords, normalize_lon, great_circle_path_pixels
 from app.core.nmea import parse_nmea_fields
 from app.workers.simulation_worker import SimulationWorker
 from app.ui.map.sim_map_view import SimMapView
@@ -55,6 +55,82 @@ from app.ui.widgets.time_input_widget import TimeInputWidget
 from app.ui.widgets.panorama_view import PanoramaView
 from app.ui.widgets import message_box as msgbox
 import app.core.state as app_state
+
+
+class FlowLayout(QLayout):
+    def __init__(self, parent=None, margin=0, hspacing=8, vspacing=6):
+        super().__init__(parent)
+        self._items = []
+        self._hspacing = hspacing
+        self._vspacing = vspacing
+        self.setContentsMargins(margin, margin, margin, margin)
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, index):
+        if 0 <= index < len(self._items):
+            return self._items[index]
+        return None
+
+    def takeAt(self, index):
+        if 0 <= index < len(self._items):
+            return self._items.pop(index)
+        return None
+
+    def expandingDirections(self):
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._do_layout(QRect(0, 0, width, 0), True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._do_layout(rect, False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        margins = self.contentsMargins()
+        size += QSize(margins.left() + margins.right(), margins.top() + margins.bottom())
+        return size
+
+    def _do_layout(self, rect, test_only):
+        x = rect.x()
+        y = rect.y()
+        line_height = 0
+
+        for item in self._items:
+            w = item.widget()
+            if w and not w.isVisible():
+                continue
+
+            item_size = item.sizeHint()
+            next_x = x + item_size.width() + self._hspacing
+
+            if next_x - self._hspacing > rect.right() and line_height > 0:
+                x = rect.x()
+                y = y + line_height + self._vspacing
+                next_x = x + item_size.width() + self._hspacing
+                line_height = 0
+
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), item_size))
+
+            x = next_x
+            line_height = max(line_height, item_size.height())
+
+        return y + line_height - rect.y()
 
 
 class TargetInfoDialog(QDialog):
@@ -92,12 +168,24 @@ class TargetInfoDialog(QDialog):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         scroll_content = QWidget()
         scroll_layout = QVBoxLayout(scroll_content)
+        scroll_layout.setSpacing(8)
+
+        # Panorama view for camera detections (moved to top)
+        pano_group = QGroupBox("CAMERA Panorama View (-90° to +90°)")
+        pano_layout = QVBoxLayout(pano_group)
+        self.panorama_view = PanoramaView()
+        self.panorama_view.setMinimumHeight(120)
+        self.panorama_view.setMaximumHeight(150)
+        pano_layout.addWidget(self.panorama_view)
+        scroll_layout.addWidget(pano_group)
 
         # Basic Info Group
         basic_group = QGroupBox("Basic Information")
         basic_layout = QVBoxLayout(basic_group)
         self.lbl_basic_info = QLabel()
         self.lbl_basic_info.setTextFormat(Qt.TextFormat.RichText)
+        self.lbl_basic_info.setWordWrap(True)
+        self.lbl_basic_info.setMinimumHeight(100)
         basic_layout.addWidget(self.lbl_basic_info)
         scroll_layout.addWidget(basic_group)
 
@@ -106,6 +194,8 @@ class TargetInfoDialog(QDialog):
         nav_layout = QVBoxLayout(nav_group)
         self.lbl_nav_info = QLabel()
         self.lbl_nav_info.setTextFormat(Qt.TextFormat.RichText)
+        self.lbl_nav_info.setWordWrap(True)
+        self.lbl_nav_info.setMinimumHeight(180)
         nav_layout.addWidget(self.lbl_nav_info)
         scroll_layout.addWidget(nav_group)
 
@@ -114,6 +204,8 @@ class TargetInfoDialog(QDialog):
         rel_layout = QVBoxLayout(rel_group)
         self.lbl_rel_info = QLabel()
         self.lbl_rel_info.setTextFormat(Qt.TextFormat.RichText)
+        self.lbl_rel_info.setWordWrap(True)
+        self.lbl_rel_info.setMinimumHeight(80)
         rel_layout.addWidget(self.lbl_rel_info)
         scroll_layout.addWidget(rel_group)
 
@@ -122,6 +214,8 @@ class TargetInfoDialog(QDialog):
         dim_layout = QVBoxLayout(dim_group)
         self.lbl_dim_info = QLabel()
         self.lbl_dim_info.setTextFormat(Qt.TextFormat.RichText)
+        self.lbl_dim_info.setWordWrap(True)
+        self.lbl_dim_info.setMinimumHeight(100)
         dim_layout.addWidget(self.lbl_dim_info)
         scroll_layout.addWidget(dim_group)
 
@@ -130,6 +224,8 @@ class TargetInfoDialog(QDialog):
         sig_layout = QVBoxLayout(sig_group)
         self.lbl_sig_info = QLabel()
         self.lbl_sig_info.setTextFormat(Qt.TextFormat.RichText)
+        self.lbl_sig_info.setWordWrap(True)
+        self.lbl_sig_info.setMinimumHeight(160)
         sig_layout.addWidget(self.lbl_sig_info)
         scroll_layout.addWidget(sig_group)
 
@@ -138,16 +234,13 @@ class TargetInfoDialog(QDialog):
         event_layout = QVBoxLayout(event_group)
         self.lbl_event_info = QLabel()
         self.lbl_event_info.setTextFormat(Qt.TextFormat.RichText)
+        self.lbl_event_info.setWordWrap(True)
+        self.lbl_event_info.setMinimumHeight(60)
         event_layout.addWidget(self.lbl_event_info)
         scroll_layout.addWidget(event_group)
 
-        # Panorama view for camera detections
-        pano_group = QGroupBox("CAMERA Panorama View (-90° to +90°)")
-        pano_layout = QVBoxLayout(pano_group)
-        self.panorama_view = PanoramaView()
-        self.panorama_view.setMinimumHeight(120)
-        pano_layout.addWidget(self.panorama_view)
-        scroll_layout.addWidget(pano_group)
+        # Add stretch at end to push content up
+        scroll_layout.addStretch()
 
         scroll.setWidget(scroll_content)
         layout.addWidget(scroll)
@@ -214,13 +307,25 @@ class TargetInfoDialog(QDialog):
         self._update_panorama_detections()
 
         # === Basic Information ===
-        ship_type = 'Random Target' if ship.idx >= 1000 else ('OwnShip' if ship.idx == current_project.settings.own_ship_idx else 'Manual Target')
+        # Determine role
+        own_idx = current_project.settings.own_ship_idx
+        receiver_idx = getattr(current_project.settings, 'receiver_ship_idx', None)
+        if ship.idx == own_idx:
+            role = "Ownship"
+        elif receiver_idx is not None and ship.idx == receiver_idx:
+            role = "Receiver"
+        elif ship.idx >= 1000:
+            role = "Target (Random)"
+        else:
+            role = "Target (Manual)"
+
+        ship_class = getattr(ship, 'ship_class', 'CONTAINER')
         basic_info = f"""
         <b>Name:</b> {ship.name}<br>
         <b>ID:</b> {ship.idx}<br>
+        <b>Role:</b> {role}<br>
         <b>MMSI:</b> {ship.mmsi}<br>
-        <b>Type:</b> {ship_type}<br>
-        <b>Ship Class:</b> {getattr(ship, 'ship_class', 'CONTAINER')}
+        <b>Ship Class:</b> {ship_class}
         """
         self.lbl_basic_info.setText(basic_info)
 
@@ -272,7 +377,6 @@ class TargetInfoDialog(QDialog):
         self.lbl_nav_info.setText(nav_info)
 
         # === Relative to OwnShip ===
-        own_idx = current_project.settings.own_ship_idx
         rel_info = "N/A (This is OwnShip)" if self.ship_idx == own_idx else "N/A"
 
         if self.ship_idx != own_idx and self.worker:
@@ -327,11 +431,25 @@ class TargetInfoDialog(QDialog):
 
         # === Signal Status ===
         sig_lines = []
+        sig_lines.append("<b>--- Transmit (TX) ---</b>")
         for sig_type in ['AIVDM', 'RATTM', 'Camera']:
             enabled = ship.signals_enabled.get(sig_type, True)
             interval = ship.signal_intervals.get(sig_type, 1.0)
             status = '<span style="color:green;">ON</span>' if enabled else '<span style="color:red;">OFF</span>'
             sig_lines.append(f"<b>{sig_type}:</b> {status} (Interval: {interval:.1f}s)")
+
+        # Receive status - only ownship receives signals by default
+        sig_lines.append("<br><b>--- Receive (RX) ---</b>")
+        if ship.idx == own_idx:
+            # Ownship receives all signals from targets
+            ais_rx = '<span style="color:green;">ON</span>' if current_project.settings.ais_reception.enabled else '<span style="color:red;">OFF</span>'
+            radar_rx = '<span style="color:green;">ON</span>' if current_project.settings.radar_detect.enabled else '<span style="color:red;">OFF</span>'
+            cam_rx = '<span style="color:green;">ON</span>' if current_project.settings.camera_reception.enabled else '<span style="color:red;">OFF</span>'
+            sig_lines.append(f"<b>AIS:</b> {ais_rx} (d0={current_project.settings.ais_reception.d0:.0f}nm, d1={current_project.settings.ais_reception.d1:.0f}nm)")
+            sig_lines.append(f"<b>Radar:</b> {radar_rx} (d0={current_project.settings.radar_detect.d0:.0f}nm, d1={current_project.settings.radar_detect.d1:.0f}nm)")
+            sig_lines.append(f"<b>Camera:</b> {cam_rx} (d0={current_project.settings.camera_reception.d0:.0f}nm, d1={current_project.settings.camera_reception.d1:.0f}nm)")
+        else:
+            sig_lines.append("N/A (Only Ownship receives signals)")
 
         sig_info = "<br>".join(sig_lines)
         self.lbl_sig_info.setText(sig_info)
@@ -741,8 +859,7 @@ class SimulationPanel(QWidget):
 
         # --- Top Controls ---
         top_controls = QWidget()
-        top_layout = QHBoxLayout(top_controls)
-        top_layout.setContentsMargins(0, 0, 0, 0)
+        top_layout = FlowLayout(top_controls, margin=0, hspacing=8, vspacing=6)
         
         self.ip_edit = QLineEdit("127.0.0.1"); self.ip_edit.setFixedWidth(100)
         self.port_edit = QLineEdit("10110"); self.port_edit.setFixedWidth(60)
@@ -763,12 +880,14 @@ class SimulationPanel(QWidget):
         self.spin_sim_duration = TimeInputWidget()
         self.spin_sim_duration.set_seconds(2592000)
         self.spin_sim_duration.valueChanged.connect(self.on_duration_spin_changed)
+        self._tune_duration_widget()
         top_layout.addWidget(QLabel("Duration:"))
         top_layout.addWidget(self.spin_sim_duration)
 
         self.btn_add_time = QPushButton("Add Extra Time")
         self.btn_add_time.setEnabled(True)
         self.btn_add_time.clicked.connect(self.action_add_extra_time)
+        self.btn_add_time.setMinimumSize(self.btn_add_time.sizeHint())
         top_layout.addWidget(self.btn_add_time)
 
         self.combo_follow = QComboBox()
@@ -783,11 +902,15 @@ class SimulationPanel(QWidget):
         
         self.btn_capture = QPushButton("Capture")
         self.btn_capture.clicked.connect(self.action_capture)
+        self.btn_capture.setMinimumSize(self.btn_capture.sizeHint())
         top_layout.addWidget(self.btn_capture)
         
         self.btn_start = QPushButton("Start")
         self.btn_pause = QPushButton("Pause")
         self.btn_stop = QPushButton("Stop")
+        self.btn_start.setMinimumSize(self.btn_start.sizeHint())
+        self.btn_pause.setMinimumSize(self.btn_pause.sizeHint())
+        self.btn_stop.setMinimumSize(self.btn_stop.sizeHint())
         self.btn_pause.setEnabled(False)
         self.btn_stop.setEnabled(False)
         self.btn_start.clicked.connect(self.action_start)
@@ -803,6 +926,8 @@ class SimulationPanel(QWidget):
         self.btn_rtg.clicked.connect(self.action_random_target_generate)
         self.btn_clear_rtg = QPushButton("Clear Random Target")
         self.btn_clear_rtg.clicked.connect(self.action_clear_random_targets)
+        self.btn_rtg.setMinimumSize(self.btn_rtg.sizeHint())
+        self.btn_clear_rtg.setMinimumSize(self.btn_clear_rtg.sizeHint())
         top_layout.addWidget(self.btn_rtg)
         top_layout.addWidget(self.btn_clear_rtg)
         
@@ -810,8 +935,6 @@ class SimulationPanel(QWidget):
         self.eta_label = QLabel("Rem: -")
         top_layout.addWidget(self.perf_label)
         top_layout.addWidget(self.eta_label)
-        
-        top_layout.addStretch()
         
         layout.addWidget(top_controls)
         
@@ -823,7 +946,6 @@ class SimulationPanel(QWidget):
         self.view = SimMapView(self.scene, self)
         self.view.mode = "VIEW"
         self.view.view_changed.connect(self.update_pen_widths)
-        mid_layout.addWidget(self.view, 3)
 
         # Right panel with scroll
         right_scroll = QScrollArea()
@@ -930,12 +1052,39 @@ class SimulationPanel(QWidget):
         right_layout.addWidget(self.info_tabs, 1)
 
         right_scroll.setWidget(right_panel)
-        mid_layout.addWidget(right_scroll, 1)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setHandleWidth(10)
+        splitter.addWidget(self.view)
+        splitter.addWidget(right_scroll)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 1)
+        mid_layout.addWidget(splitter)
         layout.addWidget(mid_widget)
         
         self.draw_static_map()
         self.update_follow_combo()
         self.update_control_combo()
+
+    def _tune_duration_widget(self):
+        """Keep Duration inputs compact and aligned with other top controls."""
+        ref_height = self.ip_edit.sizeHint().height()
+        layout = self.spin_sim_duration.layout()
+        if layout:
+            layout.setSpacing(3)
+
+        def set_compact(spin, sample_text):
+            base_width = spin.sizeHint().width()
+            min_width = spin.fontMetrics().horizontalAdvance(sample_text) + 40
+            target = max(int(base_width * 0.5), min_width)
+            spin.setFixedWidth(target)
+            spin.setFixedHeight(ref_height)
+
+        set_compact(self.spin_sim_duration.spin_d, "365d")
+        set_compact(self.spin_sim_duration.spin_h, "23h")
+        set_compact(self.spin_sim_duration.spin_m, "59m")
+        set_compact(self.spin_sim_duration.spin_s, "59.99s")
+        self.spin_sim_duration.setMinimumSize(self.spin_sim_duration.sizeHint())
 
     def _move_great_circle_step(self, lat, lon, hdg_deg, dist_m):
         lat_rad = math.radians(lat)
@@ -1445,7 +1594,13 @@ class SimulationPanel(QWidget):
         self.btn_set_hdg = QPushButton("Set")
         self.btn_set_hdg.clicked.connect(self.on_set_heading_clicked)
         layout.addWidget(self.btn_set_hdg, 2, 2)
-        
+
+        # 헤딩 고정 체크박스
+        self.chk_fix_heading = QCheckBox("Fix")
+        self.chk_fix_heading.setToolTip("Enable fixed heading mode (rhumb line instead of great circle)")
+        self.chk_fix_heading.stateChanged.connect(self.on_fix_heading_changed)
+        layout.addWidget(self.chk_fix_heading, 2, 3)
+
         return group
 
     def update_control_combo(self):
@@ -1491,7 +1646,7 @@ class SimulationPanel(QWidget):
 
     def on_control_ship_changed(self):
         idx = self.combo_control_ship.currentData()
-        
+
         # [Sync logic] Update map highlight when ship is selected from combobox
         # Clear highlight (-1) if no index is selected
         self.highlighted_ship_idx = idx if idx is not None else -1
@@ -1499,13 +1654,13 @@ class SimulationPanel(QWidget):
         self.draw_static_map()
 
         if idx is None: return
-        
+
         ship = current_project.get_ship_by_idx(idx)
         if not ship: return
-        
+
         spd = 0.0
         hdg = 0.0
-        
+
         if self.worker and self.worker.running and idx in self.worker.dynamic_ships:
             dyn = self.worker.dynamic_ships[idx]
             spd = dyn['spd']
@@ -1515,21 +1670,66 @@ class SimulationPanel(QWidget):
              st = self.calculate_ship_state(ship, t_now)
              spd = st['spd']
              hdg = st['hdg']
-             
+
         self.spin_control_spd.setValue(spd)
         self.spin_control_hdg.setValue(hdg)
+
+        # 헤딩 고정 체크박스 상태 업데이트
+        self.chk_fix_heading.blockSignals(True)
+        self.chk_fix_heading.setChecked(ship.fix_heading)
+        self.chk_fix_heading.blockSignals(False)
 
     def on_set_speed_clicked(self):
         idx = self.combo_control_ship.currentData()
         if idx is None: return
         val = self.spin_control_spd.value()
-        self.request_ship_speed_change(idx, val)
+
+        # ShipData에도 저장 (시뮬 시작 전에도 적용되도록)
+        ship = current_project.get_ship_by_idx(idx)
+        if ship:
+            ship.manual_speed = val
+
+        # 워커가 실행 중이면 즉시 반영
+        if self.worker and self.worker.running:
+            self.request_ship_speed_change(idx, val)
 
     def on_set_heading_clicked(self):
         idx = self.combo_control_ship.currentData()
         if idx is None: return
         val = self.spin_control_hdg.value()
-        self.request_ship_heading_change(idx, val)
+
+        # ShipData에도 저장 (시뮬 시작 전에도 적용되도록)
+        ship = current_project.get_ship_by_idx(idx)
+        if ship:
+            ship.manual_heading = val
+
+        # 워커가 실행 중이면 즉시 반영
+        if self.worker and self.worker.running:
+            self.request_ship_heading_change(idx, val)
+
+    def on_fix_heading_changed(self, state):
+        """헤딩 고정 체크박스 상태 변경 처리"""
+        idx = self.combo_control_ship.currentData()
+        if idx is None: return
+
+        is_fixed = (state == Qt.CheckState.Checked.value)
+
+        # 헤딩 고정 활성화 시 경고 메시지 표시
+        if is_fixed:
+            msgbox.show_warning(
+                self,
+                "Fixed Heading Warning",
+                "With fixed heading (Rhumb Line), the ship will converge toward the pole if it continues indefinitely."
+            )
+
+        # ShipData에 저장
+        ship = current_project.get_ship_by_idx(idx)
+        if ship:
+            ship.fix_heading = is_fixed
+
+        # 워커가 실행 중이면 즉시 반영
+        if self.worker and self.worker.running and idx in self.worker.dynamic_ships:
+            self.worker.set_fix_heading(idx, is_fixed)
 
     def build_trail_path(self, points):
         pp = QPainterPath()
@@ -1578,7 +1778,21 @@ class SimulationPanel(QWidget):
              
              path = QGraphicsPathItem()
              pp = QPainterPath()
-             pp.addPolygon(QPolygonF([QPointF(x,y) for x,y in ship.raw_points]))
+
+             # 대권항로로 보간된 경로 점 생성
+             mi = current_project.map_info
+             gc_pts = great_circle_path_pixels(ship.raw_points, mi, points_per_segment=30)
+             threshold = 180 * mi.pixels_per_degree
+
+             if gc_pts:
+                 pp.moveTo(QPointF(gc_pts[0][0], gc_pts[0][1]))
+                 for i in range(1, len(gc_pts)):
+                     # 경도 점프가 큰 경우 moveTo로 선 끊기
+                     if abs(gc_pts[i][0] - gc_pts[i-1][0]) > threshold:
+                         pp.moveTo(QPointF(gc_pts[i][0], gc_pts[i][1]))
+                     else:
+                         pp.lineTo(QPointF(gc_pts[i][0], gc_pts[i][1]))
+
              path.setPath(pp)
              
              width = current_project.settings.path_thickness

@@ -59,7 +59,7 @@ from app.core.models.ship import ShipData
 from app.core.models.area import Area
 from app.core.models.event import EventTrigger
 from app.core.utils import sanitize_filename
-from app.core.geometry import coords_to_pixel, pixel_to_coords, resample_polyline_numpy, resample_polygon_equidistant, normalize_lon
+from app.core.geometry import coords_to_pixel, pixel_to_coords, resample_polyline_numpy, resample_polygon_equidistant, normalize_lon, great_circle_path_pixels, calculate_bearing
 from app.ui.map.map_view import MapView
 from app.ui.dialogs.new_project_dialog import NewProjectDialog
 from app.ui.dialogs.settings_dialog import SettingsDialog
@@ -229,6 +229,13 @@ class ColoredTabBar(QTabBar):
             return QSize(space, size.height())
         return size
 
+    def minimumTabSizeHint(self, index):
+        """Return a flexible minimum size for the spacer tab."""
+        size = super().minimumTabSizeHint(index)
+        if self.tabText(index) == "":
+            return QSize(0, size.height())
+        return size
+
     def resizeEvent(self, event):
         """
         리사이즈 이벤트 핸들러입니다.
@@ -319,6 +326,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle(APP_NAME)
         self.resize(*DEFAULT_WINDOW_SIZE)
+        self.setMinimumSize(800, 600)
+        self.setMaximumSize(16777215, 16777215)
         self.apply_theme()
         self.update_stylesheets()
 
@@ -488,6 +497,9 @@ class MainWindow(QMainWindow):
             QLabel#boldLbl {{ }}
 
             QTabWidget::pane {{ border: 1px solid {border_color}; }}
+            QSplitter::handle {{ background-color: transparent; border: none; }}
+            QSplitter::handle:horizontal {{ background-color: transparent; border: none; }}
+            QSplitter::handle:vertical {{ background-color: transparent; border: none; }}
 
             QMessageBox {{ min-height: 30px; }}
             QMessageBox QLabel {{ min-height: 35px; }}
@@ -569,7 +581,10 @@ class MainWindow(QMainWindow):
         self.map_editor_widget = QWidget()
         main_h = QHBoxLayout(self.map_editor_widget)
         main_h.setContentsMargins(5, 5, 5, 5)
-        main_h.setSpacing(15)
+        main_h.setSpacing(5)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setHandleWidth(10)
 
         # 좌측 영역 (지도 뷰)
         left_widget = QWidget()
@@ -626,7 +641,7 @@ class MainWindow(QMainWindow):
         self.view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         left_v.addWidget(self.view, 1)
 
-        main_h.addWidget(left_widget, 3)
+        splitter.addWidget(left_widget)
 
         # 우측 영역 (객체 선택 및 데이터 테이블)
         right_widget = QWidget()
@@ -645,7 +660,10 @@ class MainWindow(QMainWindow):
         h.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)  # type: ignore
         right_v.addWidget(self.data_table)
 
-        main_h.addWidget(right_widget, 1)
+        splitter.addWidget(right_widget)
+
+        splitter.setSizes([int(self.width() * 0.75), int(self.width() * 0.25)])
+        main_h.addWidget(splitter)
 
         # 탭 추가
         self.tabs.addTab(self.map_editor_widget, "Path")
@@ -698,7 +716,62 @@ class MainWindow(QMainWindow):
         mi = current_project.map_info
         _, _, lat, lon = pixel_to_coords(px, py, mi)
         norm_lon = normalize_lon(lon)
-        self.lbl_coords.setText(f"Lat: {lat:.5f} Lon: {norm_lon:.5f}")
+
+        # 헤딩 편차 계산 (자선 기준)
+        heading_text = self._calculate_heading_deviation(px, py)
+
+        self.lbl_coords.setText(f"{heading_text}Lat: {lat:.5f} Lon: {norm_lon:.5f}")
+
+    def _calculate_heading_deviation(self, cursor_px, cursor_py):
+        """
+        자선 출발점 기준 마우스 커서 방향의 헤딩 편차를 계산합니다.
+
+        반환값:
+            "상대편차(R)/절대헤딩(T) " 형식 문자열, 또는 계산 불가 시 빈 문자열
+        """
+        # 자선 가져오기
+        own_idx = current_project.settings.own_ship_idx
+        own_ship = current_project.get_ship_by_idx(own_idx)
+
+        if not own_ship or len(own_ship.raw_points) < 1:
+            return "-/- "
+
+        # 자선 출발점 좌표
+        start_px, start_py = own_ship.raw_points[0]
+        mi = current_project.map_info
+        _, _, start_lat, start_lon = pixel_to_coords(start_px, start_py, mi)
+        _, _, cursor_lat, cursor_lon = pixel_to_coords(cursor_px, cursor_py, mi)
+
+        # 자선 출발점과 커서가 동일 위치면 계산 불가
+        if abs(cursor_px - start_px) < 1 and abs(cursor_py - start_py) < 1:
+            return "-/- "
+
+        # 커서 방향 절대 헤딩 (진북 기준)
+        absolute_heading = calculate_bearing(start_lat, start_lon, cursor_lat, cursor_lon)
+
+        # 자선 초기 헤딩 결정 (initial_heading 또는 첫 두 점 사이 방향)
+        if own_ship.initial_heading is not None:
+            own_heading = own_ship.initial_heading
+        elif len(own_ship.raw_points) >= 2:
+            p1_px, p1_py = own_ship.raw_points[0]
+            p2_px, p2_py = own_ship.raw_points[1]
+            _, _, lat1, lon1 = pixel_to_coords(p1_px, p1_py, mi)
+            _, _, lat2, lon2 = pixel_to_coords(p2_px, p2_py, mi)
+            own_heading = calculate_bearing(lat1, lon1, lat2, lon2)
+        else:
+            # 경로점이 1개뿐이고 initial_heading도 없으면 계산 불가
+            return f"-/{absolute_heading:.1f}(T) "
+
+        # 상대 헤딩 편차 계산 (-180 ~ +180)
+        relative_deviation = absolute_heading - own_heading
+        if relative_deviation > 180:
+            relative_deviation -= 360
+        elif relative_deviation < -180:
+            relative_deviation += 360
+
+        # 부호 표시 (+/-)
+        sign = "+" if relative_deviation >= 0 else ""
+        return f"{sign}{relative_deviation:.1f}(R)/{absolute_heading:.1f}(T) "
 
     def update_info_strip(self):
         """프로젝트 정보 패널을 업데이트합니다."""
@@ -963,11 +1036,27 @@ class MainWindow(QMainWindow):
             if not s.raw_points: continue
             pts = s.raw_points
 
-            # 경로선 그리기
+            # 경로선 그리기 (대권항로 곡선)
             if len(pts) >= 2:
+                # 대권항로로 보간된 경로 점 생성
+                mi = current_project.map_info
+                gc_pts = great_circle_path_pixels(pts, mi, points_per_segment=30)
+
                 path = QGraphicsPathItem()
                 pp = QPainterPath()
-                pp.addPolygon(QPolygonF([QPointF(x, y) for x, y in pts]))
+
+                # 날짜변경선 처리를 위한 threshold
+                threshold = 180 * mi.pixels_per_degree
+
+                if gc_pts:
+                    pp.moveTo(QPointF(gc_pts[0][0], gc_pts[0][1]))
+                    for i in range(1, len(gc_pts)):
+                        # 경도 점프가 큰 경우 moveTo로 선 끊기
+                        if abs(gc_pts[i][0] - gc_pts[i-1][0]) > threshold:
+                            pp.moveTo(QPointF(gc_pts[i][0], gc_pts[i][1]))
+                        else:
+                            pp.lineTo(QPointF(gc_pts[i][0], gc_pts[i][1]))
+
                 path.setPath(pp)
                 w = settings.path_thickness
 
@@ -1016,8 +1105,9 @@ class MainWindow(QMainWindow):
                 el.setZValue(2)
                 self.scene.addItem(el)
 
-            # 시작점('i')과 끝점('f') 라벨 표시
-            if s.raw_points:
+            # Single Point + Heading 모드: i, f 라벨 표시하지 않음
+            # 일반 경로 모드: 시작점('i')과 끝점('f') 라벨 표시
+            if s.initial_heading is None and s.raw_points:
                 start_pt = s.raw_points[0]
                 end_pt = s.raw_points[-1]
                 ti = QGraphicsTextItem("i")
@@ -1158,9 +1248,11 @@ class MainWindow(QMainWindow):
 
         btn_map = QPushButton("Click on Map")
         btn_manual = QPushButton("Input Lat/Lon manually")
+        btn_heading = QPushButton("Single Point + Heading (Great Circle)")
 
         v.addWidget(btn_map)
         v.addWidget(btn_manual)
+        v.addWidget(btn_heading)
 
         def on_map():
             dlg.accept()
@@ -1170,8 +1262,13 @@ class MainWindow(QMainWindow):
             dlg.reject()
             self.manual_add_point_dialog()
 
+        def on_heading():
+            dlg.reject()
+            self.single_point_heading_dialog()
+
         btn_map.clicked.connect(on_map)
         btn_manual.clicked.connect(on_manual)
+        btn_heading.clicked.connect(on_heading)
 
         dlg.exec()
 
@@ -1196,6 +1293,101 @@ class MainWindow(QMainWindow):
             mi = current_project.map_info
             px, py = coords_to_pixel(lat_spin.value(), lon_spin.value(), mi)
             self.add_point_click(px, py)
+
+    def single_point_heading_dialog(self):
+        """
+        Single Point + Heading 모드로 선박 경로를 설정하는 다이얼로그를 표시합니다.
+
+        점 하나와 초기 헤딩만 입력받아 시뮬레이션 시 그 방향의 대권항로로 이동합니다.
+        랜덤 생성 선박과 달리 사용자가 위치와 헤딩을 직접 지정합니다.
+        """
+        txt = self.obj_combo.currentText()
+        if "[Ship]" not in txt:
+            msg.show_warning(self, "Warning", "Please select a Ship first.")
+            return
+
+        sid = self.obj_combo.currentData()
+        ship = current_project.get_ship_by_idx(sid)
+        if not ship:
+            return
+
+        # 이미 포인트가 있으면 경고
+        if ship.raw_points:
+            result = msg.show_question(
+                self, "Existing Points",
+                "This ship already has points. Using Single Point + Heading mode will replace all existing points.\n\nContinue?"
+            )
+            if result == msg.StandardButton.No:
+                return
+
+        d = QDialog(self)
+        d.setWindowTitle("Single Point + Heading")
+        f = QFormLayout(d)
+
+        # 위치 입력
+        lbl_pos = QLabel("<b>Start Position</b>")
+        f.addRow(lbl_pos)
+
+        lat_spin = QDoubleSpinBox()
+        lat_spin.setRange(-90, 90)
+        lat_spin.setDecimals(6)
+        lat_spin.setValue(0.0)
+        f.addRow("Latitude:", lat_spin)
+
+        lon_spin = QDoubleSpinBox()
+        lon_spin.setRange(-180, 180)
+        lon_spin.setDecimals(6)
+        lon_spin.setValue(0.0)
+        f.addRow("Longitude:", lon_spin)
+
+        # 헤딩 입력
+        lbl_hdg = QLabel("<b>Initial Heading</b>")
+        f.addRow(lbl_hdg)
+
+        hdg_spin = QDoubleSpinBox()
+        hdg_spin.setRange(0, 360)
+        hdg_spin.setDecimals(1)
+        hdg_spin.setValue(0.0)
+        hdg_spin.setSuffix("°")
+        f.addRow("Heading (0=N, 90=E):", hdg_spin)
+
+        # 속도 입력
+        lbl_spd = QLabel("<b>Initial Speed</b>")
+        f.addRow(lbl_spd)
+
+        spd_spin = QDoubleSpinBox()
+        spd_spin.setRange(0, 1000)
+        spd_spin.setDecimals(1)
+        spd_spin.setValue(10.0)
+        spd_spin.setSuffix(" kn")
+        f.addRow("Speed:", spd_spin)
+
+        # 설명 라벨
+        info_lbl = QLabel(
+            "<i>The ship will move along a great circle route<br>"
+            "in the specified heading direction during simulation.</i>"
+        )
+        info_lbl.setWordWrap(True)
+        f.addRow(info_lbl)
+
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(d.accept)
+        bb.rejected.connect(d.reject)
+        f.addWidget(bb)
+
+        if d.exec() == QDialog.DialogCode.Accepted:
+            mi = current_project.map_info
+            px, py = coords_to_pixel(lat_spin.value(), lon_spin.value(), mi)
+
+            # 기존 포인트 초기화
+            ship.raw_points = [(px, py)]
+            ship.raw_speeds = {0: spd_spin.value()}
+            ship.raw_notes = {0: f"Heading: {hdg_spin.value():.1f}°"}
+
+            # initial_heading 설정 (이 값이 있으면 Single Point + Heading 모드)
+            ship.initial_heading = hdg_spin.value()
+
+            self.handle_path_change(ship)
 
     def handle_path_change(self, ship, redraw=True):
         """
@@ -1456,6 +1648,7 @@ class MainWindow(QMainWindow):
             p.settings.dropout_probs = s.get("dropout_probs", {})
             p.settings.theme_mode = s.get("theme_mode", "System")
             p.settings.mask_color = s.get("mask_color", "#404040")
+            p.settings.ais_fragment_delivery_prob = s.get("ais_fragment_delivery_prob", 0.95)
 
             # 선박 로드
             for s_data in data.get("ships", []):
@@ -1480,6 +1673,9 @@ class MainWindow(QMainWindow):
                 ship.draft_m = s_data.get("draft_m", 15.0)
                 ship.air_draft_m = s_data.get("air_draft_m", 60.0)
                 ship.height_m = s_data.get("height_m", ship.air_draft_m * 0.5)
+
+                # Single Point + Heading 모드 로드
+                ship.initial_heading = s_data.get("initial_heading", None)
 
                 ship.total_duration_sec = 0.0
                 ship.packed_data = None
@@ -1618,7 +1814,7 @@ class MainWindow(QMainWindow):
                     "speed": spd
                 })
 
-            ships_list.append({
+            ship_data = {
                 "ship_index": s.idx,
                 "ship_name": s.name,
                 "mmsi": s.mmsi,
@@ -1630,7 +1826,11 @@ class MainWindow(QMainWindow):
                 "draft_m": s.draft_m,
                 "air_draft_m": s.air_draft_m,
                 "height_m": s.height_m
-            })
+            }
+            # Single Point + Heading 모드 저장
+            if s.initial_heading is not None:
+                ship_data["initial_heading"] = s.initial_heading
+            ships_list.append(ship_data)
 
             # 개별 선박 파일 저장
             ship_fname = f"Ship_{s.idx}.json"
@@ -1712,7 +1912,8 @@ class MainWindow(QMainWindow):
                 "traveled_path_thickness": p.settings.traveled_path_thickness,
                 "mask_color": p.settings.mask_color,
                 "dropout_probs": p.settings.dropout_probs,
-                "theme_mode": p.settings.theme_mode
+                "theme_mode": p.settings.theme_mode,
+                "ais_fragment_delivery_prob": p.settings.ais_fragment_delivery_prob
             },
             "ships": ships_list,
             "areas": areas_list,

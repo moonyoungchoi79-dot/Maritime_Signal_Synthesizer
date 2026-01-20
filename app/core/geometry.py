@@ -486,3 +486,132 @@ def path_points_to_ecef(points, mi):
         x, y, z = lla_to_ecef(lat, lon, 0.0)
         ecef_points.append((x, y, z))
     return ecef_points
+
+
+def great_circle_interpolate(lat1: float, lon1: float, lat2: float, lon2: float,
+                             n_points: int = 50) -> List[Tuple[float, float]]:
+    """
+    두 지점 사이의 대권항로(Great Circle Route)를 따라 보간된 점들을 반환합니다.
+
+    ECEF 좌표계에서 구면선형보간(Slerp)을 사용하여 대권항로를 계산합니다.
+
+    매개변수:
+        lat1, lon1: 시작점 위도, 경도 (도 단위)
+        lat2, lon2: 끝점 위도, 경도 (도 단위)
+        n_points: 보간할 점의 개수 (시작점, 끝점 포함)
+
+    반환값:
+        보간된 점들의 목록 [(lat, lon), ...]
+    """
+    if n_points < 2:
+        return [(lat1, lon1), (lat2, lon2)]
+
+    # 시작점과 끝점을 ECEF로 변환
+    x1, y1, z1 = lla_to_ecef(lat1, lon1, 0.0)
+    x2, y2, z2 = lla_to_ecef(lat2, lon2, 0.0)
+
+    # ECEF 벡터의 크기 (지구 반경에 해당)
+    r1 = math.sqrt(x1**2 + y1**2 + z1**2)
+    r2 = math.sqrt(x2**2 + y2**2 + z2**2)
+
+    # 단위 벡터로 정규화
+    ux1, uy1, uz1 = x1/r1, y1/r1, z1/r1
+    ux2, uy2, uz2 = x2/r2, y2/r2, z2/r2
+
+    # 두 벡터 사이의 각도 (구면 거리)
+    dot = ux1*ux2 + uy1*uy2 + uz1*uz2
+    dot = max(-1.0, min(1.0, dot))  # 부동소수점 오류 방지
+    omega = math.acos(dot)
+
+    # 각도가 매우 작으면 직선 보간 사용
+    if abs(omega) < 1e-10:
+        return [(lat1, lon1), (lat2, lon2)]
+
+    sin_omega = math.sin(omega)
+
+    result = []
+    for i in range(n_points):
+        t = i / (n_points - 1)
+
+        # Slerp (구면선형보간)
+        a = math.sin((1 - t) * omega) / sin_omega
+        b = math.sin(t * omega) / sin_omega
+
+        # 보간된 ECEF 좌표 (단위 벡터)
+        ux = a * ux1 + b * ux2
+        uy = a * uy1 + b * uy2
+        uz = a * uz1 + b * uz2
+
+        # 지구 표면으로 스케일 (평균 반경 사용)
+        r = (r1 + r2) / 2
+        x, y, z = ux * r, uy * r, uz * r
+
+        # LLA로 변환
+        lat, lon, _ = ecef_to_lla(x, y, z)
+        result.append((lat, lon))
+
+    return result
+
+
+def calculate_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """
+    두 지점 간 방위각(진방위)을 계산합니다.
+
+    매개변수:
+        lat1, lon1: 시작점 위도, 경도 (도 단위)
+        lat2, lon2: 목표점 위도, 경도 (도 단위)
+
+    반환값:
+        방위각 (0~360도, 0=북, 90=동)
+    """
+    lat1_rad = math.radians(lat1)
+    lat2_rad = math.radians(lat2)
+    d_lon = math.radians(lon2 - lon1)
+
+    x = math.sin(d_lon) * math.cos(lat2_rad)
+    y = math.cos(lat1_rad) * math.sin(lat2_rad) - \
+        math.sin(lat1_rad) * math.cos(lat2_rad) * math.cos(d_lon)
+
+    bearing = math.degrees(math.atan2(x, y))
+    return (bearing + 360) % 360
+
+
+def great_circle_path_pixels(raw_points: List[Tuple[float, float]],
+                             mi: "MapInfo",
+                             points_per_segment: int = 30) -> List[Tuple[float, float]]:
+    """
+    제어점들 사이를 대권항로로 연결한 픽셀 좌표 경로를 반환합니다.
+
+    매개변수:
+        raw_points: 원본 제어점 목록 [(px, py), ...] (픽셀 좌표)
+        mi: 지도 정보 객체 (MapInfo)
+        points_per_segment: 각 세그먼트당 보간할 점의 개수
+
+    반환값:
+        대권항로를 따라 보간된 픽셀 좌표 목록 [(px, py), ...]
+    """
+    if not raw_points or len(raw_points) < 2:
+        return list(raw_points) if raw_points else []
+
+    result = []
+
+    for i in range(len(raw_points) - 1):
+        px1, py1 = raw_points[i]
+        px2, py2 = raw_points[i + 1]
+
+        # 픽셀 좌표를 위경도로 변환
+        _, _, lat1, lon1 = pixel_to_coords(px1, py1, mi)
+        _, _, lat2, lon2 = pixel_to_coords(px2, py2, mi)
+
+        # 대권항로 보간
+        gc_points = great_circle_interpolate(lat1, lon1, lat2, lon2, points_per_segment)
+
+        # 위경도를 픽셀 좌표로 변환
+        for j, (lat, lon) in enumerate(gc_points):
+            # 마지막 세그먼트가 아니면 끝점 제외 (다음 세그먼트 시작점과 중복 방지)
+            if i < len(raw_points) - 2 and j == len(gc_points) - 1:
+                continue
+            px, py = coords_to_pixel(lat, lon, mi)
+            result.append((px, py))
+
+    return result

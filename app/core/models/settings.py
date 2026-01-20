@@ -107,7 +107,7 @@ class ProjectSettings:
         include_gp_signal: GP 신호 포함 여부
         jitter_enabled: 시간 지터 활성화 여부
         dropout_probs: 신호별 유실 확률
-        ais_fragment_probs: AIS 프래그먼트 확률
+        ais_fragment_delivery_prob: AIS fragment 전달 확률
 
     수신 모델 설정:
         reception_model_enabled: 거리 기반 수신 모델 활성화
@@ -149,9 +149,10 @@ class ProjectSettings:
         "Camera": 0.1  # 카메라 신호 유실 확률
     })
 
-    # AIS 프래그먼트 확률 (1~5개 프래그먼트)
-    # 각 인덱스는 해당 개수의 프래그먼트가 생성될 상대적 확률
-    ais_fragment_probs: List[float] = field(default_factory=lambda: [8.0, 1.0, 0.5, 0.4, 0.1])
+    # AIS 프래그먼트 전달 확률 (각 fragment가 성공적으로 전달될 확률)
+    # pyais가 페이로드 길이에 따라 결정론적으로 분할하고,
+    # 각 fragment는 이 확률에 따라 전달/유실됨
+    ais_fragment_delivery_prob: float = 0.95  # 각 fragment의 전달 확률 (0~1)
 
     # 거리 기반 수신 모델 설정
     reception_model_enabled: bool = True  # 수신 모델 활성화

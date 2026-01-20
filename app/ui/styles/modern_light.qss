@@ -20,7 +20,7 @@
 /* === Global Styles === */
 QWidget {
     font-family: "Segoe UI", "SF Pro Display", -apple-system, sans-serif;
-    font-size: 13px;
+    font-size: 9.75pt;
     color: #0f172a;
     background-color: #ffffff;
 }
@@ -29,10 +29,23 @@ QMainWindow {
     background-color: #f8fafc;
 }
 
+QSplitter::handle {
+    background-color: transparent;
+    border: none;
+}
+QSplitter::handle:horizontal {
+    background-color: transparent;
+    border: none;
+}
+QSplitter::handle:vertical {
+    background-color: transparent;
+    border: none;
+}
+
 /* === Group Box === */
 QGroupBox {
     font-weight: 600;
-    font-size: 13px;
+    font-size: 9.75pt;
     color: #0f172a;
     border: 1px solid #e2e8f0;
     border-radius: 8px;
@@ -91,7 +104,7 @@ QPushButton[text="+"], QPushButton[text="-"] {
     padding: 4px 8px;
     min-width: 28px;
     min-height: 28px;
-    font-size: 14px;
+    font-size: 10.5pt;
     font-weight: 600;
 }
 
@@ -283,7 +296,7 @@ QHeaderView::section {
     background-color: #f8fafc;
     color: #475569;
     font-weight: 600;
-    font-size: 12px;
+    font-size: 9pt;
     padding: 12px;
     border: none;
     border-bottom: 2px solid #e2e8f0;
@@ -506,7 +519,7 @@ QToolTip {
     border: none;
     border-radius: 6px;
     padding: 8px 12px;
-    font-size: 12px;
+    font-size: 9pt;
 }
 
 /* === Dialog === */
@@ -525,7 +538,8 @@ QMessageBox {
 
 QMessageBox QLabel {
     color: #0f172a;
-    font-size: 14px;
+    font-size: 10.5pt;
+    max-height: 16777215px;
 }
 
 /* === Frame === */
@@ -544,14 +558,14 @@ QLabel {
 }
 
 QLabel[heading="true"] {
-    font-size: 18px;
+    font-size: 13.5pt;
     font-weight: 600;
     color: #0f172a;
     max-height: 24px;
 }
 
 QLabel[subheading="true"] {
-    font-size: 14px;
+    font-size: 10.5pt;
     color: #64748b;
     max-height: 20px;
 }

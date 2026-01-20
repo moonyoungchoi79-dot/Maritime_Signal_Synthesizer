@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit,
     QComboBox, QListWidget, QListWidgetItem, QGroupBox, QFormLayout,
     QFileDialog, QCheckBox, QAbstractItemView, QDoubleSpinBox, QSpinBox, QMenu,
-    QScrollArea, QSizePolicy, QDialog, QDialogButtonBox
+    QScrollArea, QSizePolicy, QDialog, QDialogButtonBox, QSplitter
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor
@@ -87,6 +87,7 @@ class ScenarioPanel(QWidget):
 
         scroll_content = QWidget()
         main_layout = QHBoxLayout(scroll_content)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
 
         # --- Left Panel: Scenario List ---
         left_widget = QWidget()
@@ -115,7 +116,7 @@ class ScenarioPanel(QWidget):
         btn_box.addWidget(self.btn_remove_scen)
         left_layout.addLayout(btn_box)
         
-        main_layout.addWidget(left_widget, 1)
+        splitter.addWidget(left_widget)
         
         # --- Right Panel: Scenario Editor ---
         right_widget = QWidget()
@@ -263,7 +264,11 @@ class ScenarioPanel(QWidget):
         self.chk_enable_scen.toggled.connect(self.on_enable_toggled)
         self.right_layout.addWidget(self.chk_enable_scen)
         
-        main_layout.addWidget(right_widget, 3)
+        splitter.addWidget(right_widget)
+
+        splitter.setHandleWidth(10)
+        splitter.setSizes([300, 900])
+        main_layout.addWidget(splitter)
 
         scroll.setWidget(scroll_content)
         outer_layout.addWidget(scroll)

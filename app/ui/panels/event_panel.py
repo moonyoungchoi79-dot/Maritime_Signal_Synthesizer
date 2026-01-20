@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QSpinBox, QDoubleSpinBox, QVBoxLayout, QListWidget,
     QAbstractItemView, QPushButton, QGroupBox, QFormLayout, QLineEdit, QCheckBox,
     QComboBox, QLabel, QListWidgetItem, QTableWidget, QHeaderView, QTableWidgetItem,
-    QFrame, QScrollArea
+    QFrame, QScrollArea, QSplitter
 )
 from PyQt6.QtCore import (
     Qt
@@ -60,6 +60,7 @@ class EventScriptPanel(QWidget):
 
         scroll_content = QWidget()
         layout = QHBoxLayout(scroll_content)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
 
         # Left: List of Events
         left_panel = QWidget()
@@ -100,7 +101,7 @@ class EventScriptPanel(QWidget):
         btn_box.addWidget(self.btn_del)
         left_layout.addLayout(btn_box)
         
-        layout.addWidget(left_panel, 1)
+        splitter.addWidget(left_panel)
         
         # Right: Editor
         self.editor_group = QGroupBox("Event Details")
@@ -164,7 +165,11 @@ class EventScriptPanel(QWidget):
         btn_save.clicked.connect(self.save_current_event)
         form.addRow(btn_save)
         
-        layout.addWidget(self.editor_group, 2)
+        splitter.addWidget(self.editor_group)
+
+        splitter.setHandleWidth(10)
+        splitter.setSizes([400, 600])
+        layout.addWidget(splitter)
 
         scroll.setWidget(scroll_content)
         outer_layout.addWidget(scroll)

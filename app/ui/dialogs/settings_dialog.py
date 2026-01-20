@@ -798,31 +798,22 @@ class SettingsDialog(QDialog):
         """
         w = QWidget()
         layout = QVBoxLayout(w)
-        
-        info_label = QLabel("Set noise levels for each signal type.")
-        info_label.setToolTip("Set small fluctuations (noise) for each ship and signal type to increase realism.")
-        info_label.setStyleSheet("font-style: italic; color: #555;")
-        layout.addWidget(info_label)
 
-        # --- New: AIS Fragment Probabilities ---
-        ais_frag_group = QGroupBox("AIS Message Fragment Probabilities (1-5 fragments)")
+        # --- AIS Fragment Delivery Probability ---
+        ais_frag_group = QGroupBox("AIS Fragment Settings")
         ais_frag_layout = QFormLayout(ais_frag_group)
 
-        self.ais_frag_spins = []
-        for i in range(5):
-            s = QDoubleSpinBox()
-            s.setRange(0.0, 100.0) # Probabilities can be relative, so a wider range
-            s.setSingleStep(0.1)
-            s.setDecimals(2)
-            s.setValue(current_project.settings.ais_fragment_probs[i])
-            
-            label = QLabel(f"{i+1} Fragment Probability:")
-            label.setToolTip(f"Relative probability of generating an AIS message with {i+1} fragments.")
-            ais_frag_layout.addRow(label, s)
-            self.ais_frag_spins.append(s)
-        
+        self.spin_fragment_delivery = QDoubleSpinBox()
+        self.spin_fragment_delivery.setRange(0.0, 1.0)
+        self.spin_fragment_delivery.setSingleStep(0.01)
+        self.spin_fragment_delivery.setDecimals(2)
+        self.spin_fragment_delivery.setValue(current_project.settings.ais_fragment_delivery_prob)
+
+        delivery_label = QLabel("Fragment Delivery Probability:")
+        ais_frag_layout.addRow(delivery_label, self.spin_fragment_delivery)
+
         layout.addWidget(ais_frag_group)
-        # --- End New ---
+        # --- End AIS Fragment Settings ---
 
         self.signal_noise_table = QTableWidget()
         self.talkers = ["AIVDM", "RATTM", "Camera"]
@@ -1005,6 +996,5 @@ class SettingsDialog(QDialog):
         if camera_config:
             current_project.settings.camera_reception = camera_config
 
-        for i, s in enumerate(self.ais_frag_spins):
-            current_project.settings.ais_fragment_probs[i] = s.value()
+        current_project.settings.ais_fragment_delivery_prob = self.spin_fragment_delivery.value()
 

@@ -47,7 +47,7 @@ from app.ui.windows.main_window import MainWindow
 from app.core.constants import CSV_HEADER
 from app.core.models.project import current_project, ShipData
 from app.core.utils import sanitize_filename
-from app.core.geometry import coords_to_pixel, pixel_to_coords, normalize_lon
+from app.core.geometry import coords_to_pixel, pixel_to_coords, normalize_lon, great_circle_path_pixels
 from app.core.nmea import parse_nmea_fields
 from app.ui.map.sim_map_view import SimMapView
 from app.workers.simulation_worker import SimulationWorker
@@ -854,20 +854,23 @@ class SimulationWindow(QWidget):
 
             c = QColor(c_hex)
 
-            # 경로 그리기
+            # 경로 그리기 (대권항로 곡선)
             path = QGraphicsPathItem()
             pp = QPainterPath()
 
-            points = [QPointF(x, y) for x, y in ship.raw_points]
-            if points:
-                pp.moveTo(points[0])
-                mi = current_project.map_info
-                threshold = 180 * mi.pixels_per_degree
-                for i in range(1, len(points)):
-                    if abs(points[i].x() - points[i-1].x()) > threshold:
-                        pp.moveTo(points[i])
+            mi = current_project.map_info
+            # 대권항로로 보간된 경로 점 생성
+            gc_pts = great_circle_path_pixels(ship.raw_points, mi, points_per_segment=30)
+            threshold = 180 * mi.pixels_per_degree
+
+            if gc_pts:
+                pp.moveTo(QPointF(gc_pts[0][0], gc_pts[0][1]))
+                for i in range(1, len(gc_pts)):
+                    # 경도 점프가 큰 경우 moveTo로 선 끊기
+                    if abs(gc_pts[i][0] - gc_pts[i-1][0]) > threshold:
+                        pp.moveTo(QPointF(gc_pts[i][0], gc_pts[i][1]))
                     else:
-                        pp.lineTo(points[i])
+                        pp.lineTo(QPointF(gc_pts[i][0], gc_pts[i][1]))
 
             path.setPath(pp)
 
