@@ -557,6 +557,10 @@ QLabel {
     max-height: 20px;
 }
 
+QLabel[infoBlock="true"] {
+    max-height: 16777215px;
+}
+
 QLabel[heading="true"] {
     font-size: 13.5pt;
     font-weight: 600;

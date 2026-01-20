@@ -186,6 +186,7 @@ class TargetInfoDialog(QDialog):
         self.lbl_basic_info.setTextFormat(Qt.TextFormat.RichText)
         self.lbl_basic_info.setWordWrap(True)
         self.lbl_basic_info.setMinimumHeight(100)
+        self.lbl_basic_info.setProperty("infoBlock", True)
         basic_layout.addWidget(self.lbl_basic_info)
         scroll_layout.addWidget(basic_group)
 
@@ -196,6 +197,7 @@ class TargetInfoDialog(QDialog):
         self.lbl_nav_info.setTextFormat(Qt.TextFormat.RichText)
         self.lbl_nav_info.setWordWrap(True)
         self.lbl_nav_info.setMinimumHeight(180)
+        self.lbl_nav_info.setProperty("infoBlock", True)
         nav_layout.addWidget(self.lbl_nav_info)
         scroll_layout.addWidget(nav_group)
 
@@ -206,6 +208,7 @@ class TargetInfoDialog(QDialog):
         self.lbl_rel_info.setTextFormat(Qt.TextFormat.RichText)
         self.lbl_rel_info.setWordWrap(True)
         self.lbl_rel_info.setMinimumHeight(80)
+        self.lbl_rel_info.setProperty("infoBlock", True)
         rel_layout.addWidget(self.lbl_rel_info)
         scroll_layout.addWidget(rel_group)
 
@@ -216,6 +219,7 @@ class TargetInfoDialog(QDialog):
         self.lbl_dim_info.setTextFormat(Qt.TextFormat.RichText)
         self.lbl_dim_info.setWordWrap(True)
         self.lbl_dim_info.setMinimumHeight(100)
+        self.lbl_dim_info.setProperty("infoBlock", True)
         dim_layout.addWidget(self.lbl_dim_info)
         scroll_layout.addWidget(dim_group)
 
@@ -226,6 +230,7 @@ class TargetInfoDialog(QDialog):
         self.lbl_sig_info.setTextFormat(Qt.TextFormat.RichText)
         self.lbl_sig_info.setWordWrap(True)
         self.lbl_sig_info.setMinimumHeight(160)
+        self.lbl_sig_info.setProperty("infoBlock", True)
         sig_layout.addWidget(self.lbl_sig_info)
         scroll_layout.addWidget(sig_group)
 
@@ -236,6 +241,7 @@ class TargetInfoDialog(QDialog):
         self.lbl_event_info.setTextFormat(Qt.TextFormat.RichText)
         self.lbl_event_info.setWordWrap(True)
         self.lbl_event_info.setMinimumHeight(60)
+        self.lbl_event_info.setProperty("infoBlock", True)
         event_layout.addWidget(self.lbl_event_info)
         scroll_layout.addWidget(event_group)
 
