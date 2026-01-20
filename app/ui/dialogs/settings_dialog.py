@@ -87,6 +87,7 @@ class SettingsDialog(QDialog):
         self.init_dropout()
         self.init_object()
         self.init_signal()
+        self._bind_sim_state()
         
         self.list_widget.currentRowChanged.connect(self.stack.setCurrentIndex)
         
@@ -215,11 +216,6 @@ class SettingsDialog(QDialog):
         # 상단: 전체 활성화 체크박스와 프리셋
         top_layout = QHBoxLayout()
 
-        self.chk_reception_enabled = QCheckBox("Distance-based reception model 사용")
-        self.chk_reception_enabled.setChecked(current_project.settings.reception_model_enabled)
-        self.chk_reception_enabled.stateChanged.connect(self._on_reception_enabled_changed)
-        top_layout.addWidget(self.chk_reception_enabled)
-
         top_layout.addStretch()
 
         preset_label = QLabel("Preset:")
@@ -254,12 +250,8 @@ class SettingsDialog(QDialog):
         self.reception_tabs.addTab(camera_tab, "CAMERA")
 
         # Preview 탭
-        preview_tab = self._create_preview_tab()
-        self.reception_tabs.addTab(preview_tab, "Preview")
 
         main_layout.addWidget(self.reception_tabs)
-
-        self._on_reception_enabled_changed()
         self.stack.addWidget(w)
 
     def _create_reception_tab(self, tab_type: str, config):
@@ -350,55 +342,16 @@ class SettingsDialog(QDialog):
         simple_layout.addRow("d >= d1 에서 완전 차단:", chk_full_block)
 
         layout.addWidget(simple_group)
-
-        # Advanced Settings 그룹 (접힘)
-        adv_group = QGroupBox("Advanced Settings")
-        adv_group.setCheckable(True)
-        adv_group.setChecked(False)
-        adv_layout = QFormLayout(adv_group)
-
-        # Curve type
-        combo_curve = QComboBox()
-        combo_curve.addItems(["smoothstep", "linear", "logistic"])
-        combo_curve.setCurrentText(config.curve_type)
-        combo_curve.currentTextChanged.connect(lambda v: self._update_preview())
-        adv_layout.addRow("Curve type:", combo_curve)
-
-        # Burst loss
-        chk_burst = QCheckBox("Enable burst loss")
-        chk_burst.setChecked(config.burst_enabled)
-        adv_layout.addRow("", chk_burst)
-
-        spin_burst_min = QDoubleSpinBox()
-        spin_burst_min.setRange(0.1, 60)
-        spin_burst_min.setValue(config.burst_min_sec)
-        spin_burst_min.setSuffix(" s")
-        adv_layout.addRow("Min burst length:", spin_burst_min)
-
-        spin_burst_max = QDoubleSpinBox()
-        spin_burst_max.setRange(0.1, 60)
-        spin_burst_max.setValue(config.burst_max_sec)
-        spin_burst_max.setSuffix(" s")
-        adv_layout.addRow("Max burst length:", spin_burst_max)
-
-        spin_burst_mult = QDoubleSpinBox()
-        spin_burst_mult.setRange(0.1, 10)
-        spin_burst_mult.setValue(config.burst_trigger_mult)
-        adv_layout.addRow("Burst trigger multiplier:", spin_burst_mult)
-
-        layout.addWidget(adv_group)
         layout.addStretch()
 
         # 위젯 참조 저장
         if not hasattr(self, 'reception_widgets'):
             self.reception_widgets = {}
-
-        self.reception_widgets[tab_type] = {
+        widgets = {
             'd0': spin_d0, 'd1': spin_d1, 'p0': spin_p0, 'p1': spin_p1,
-            'full_block': chk_full_block, 'curve': combo_curve,
-            'burst_enabled': chk_burst, 'burst_min': spin_burst_min,
-            'burst_max': spin_burst_max, 'burst_mult': spin_burst_mult
+            'full_block': chk_full_block
         }
+        self.reception_widgets[tab_type] = widgets
 
         scroll.setWidget(tab_widget)
         return scroll
@@ -525,17 +478,31 @@ class SettingsDialog(QDialog):
         if not widgets:
             return None
 
+        if tab_type == "ais":
+            base_config = current_project.settings.ais_reception
+        elif tab_type == "radar":
+            base_config = current_project.settings.radar_detect
+        elif tab_type == "camera":
+            base_config = current_project.settings.camera_reception
+        else:
+            base_config = None
+        curve_type = base_config.curve_type if base_config else "smoothstep"
+        burst_enabled = base_config.burst_enabled if base_config else False
+        burst_min_sec = base_config.burst_min_sec if base_config else 1.0
+        burst_max_sec = base_config.burst_max_sec if base_config else 5.0
+        burst_trigger_mult = base_config.burst_trigger_mult if base_config else 2.0
+
         config = ReceptionModelConfig(
             d0=widgets['d0'].value(),
             d1=widgets['d1'].value(),
             p0=widgets['p0'].value(),
             p1=widgets['p1'].value(),
             full_block_at_d1=widgets['full_block'].isChecked(),
-            curve_type=widgets['curve'].currentText(),
-            burst_enabled=widgets['burst_enabled'].isChecked(),
-            burst_min_sec=widgets['burst_min'].value(),
-            burst_max_sec=widgets['burst_max'].value(),
-            burst_trigger_mult=widgets['burst_mult'].value()
+            curve_type=curve_type,
+            burst_enabled=burst_enabled,
+            burst_min_sec=burst_min_sec,
+            burst_max_sec=burst_max_sec,
+            burst_trigger_mult=burst_trigger_mult
         )
         return config
 
@@ -576,18 +543,6 @@ class SettingsDialog(QDialog):
         if PYQTGRAPH_AVAILABLE and hasattr(self, 'preview_vline'):
             self.preview_vline.setPos(value)
         self._update_preview()
-
-    def _on_reception_enabled_changed(self):
-        """
-        수신 모델 활성화/비활성화 상태 변경 시 호출됩니다.
-
-        체크 해제 시 수신 모델 관련 UI를 비활성화합니다.
-        """
-        enabled = self.chk_reception_enabled.isChecked()
-        self.reception_tabs.setEnabled(enabled)
-        self.combo_preset.setEnabled(enabled)
-        self.btn_reset_preset.setEnabled(enabled)
-
     def _on_preset_changed(self, index):
         """
         프리셋 콤보박스 변경 시 호출됩니다.
@@ -668,6 +623,7 @@ class SettingsDialog(QDialog):
         self.spin_own.setValue(current_project.settings.own_ship_idx)
         self.spin_own.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self.spin_own.setMaximumWidth(100)
+        self._sync_own_ship_lock()
         label = QLabel("Own Ship Index:")
         label.setToolTip("Index (ID) of the ship to be treated as Own Ship. Own Ship generates additional signals like GPRMC.")
         form_layout.addRow(label, self.spin_own)
@@ -748,6 +704,27 @@ class SettingsDialog(QDialog):
         
         l.addWidget(obj_group)
         self.stack.addWidget(w)
+
+    def _bind_sim_state(self):
+        parent = self.parent()
+        if parent and hasattr(parent, "sim_panel"):
+            try:
+                parent.sim_panel.state_changed.connect(self._sync_own_ship_lock)
+            except Exception:
+                pass
+
+    def _is_simulation_active(self):
+        parent = self.parent()
+        if parent and hasattr(parent, "sim_panel"):
+            sim_panel = parent.sim_panel
+            worker = getattr(sim_panel, "worker", None)
+            if worker and getattr(worker, "running", False):
+                return True
+        return False
+
+    def _sync_own_ship_lock(self, *args):
+        if hasattr(self, "spin_own"):
+            self.spin_own.setEnabled(not self._is_simulation_active())
         
     def delete_checked_objects(self):
         """
@@ -814,117 +791,7 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(ais_frag_group)
         # --- End AIS Fragment Settings ---
-
-        self.signal_noise_table = QTableWidget()
-        self.talkers = ["AIVDM", "RATTM", "Camera"]
-        ships = current_project.ships
-        
-        self.signal_noise_table.setRowCount(len(ships) + 1)
-        self.signal_noise_table.setColumnCount(len(self.talkers) + 1)
-
-        self.signal_noise_table.setHorizontalHeaderLabels(["Ctrl"] + self.talkers)
-        self.signal_noise_table.setVerticalHeaderLabels(["ALL"] + [s.name for s in ships])
-
-        for r in range(self.signal_noise_table.rowCount()):
-            for c in range(self.signal_noise_table.columnCount()):
-                val = 0.001
-                if r > 0 and c > 0:
-                    ship = ships[r - 1]
-                    talker = self.talkers[c - 1]
-                    val = ship.variances.get(talker, 0.001)
-
-                spin = self._create_signal_noise_cell(val)
-                spin.setProperty("row", r)
-                spin.setProperty("col", c)
-                spin.valueChanged.connect(self.on_signal_noise_changed)
-                self.signal_noise_table.setCellWidget(r, c, spin)
-
-        self.signal_noise_table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        for i in range(self.signal_noise_table.columnCount()):
-            self.signal_noise_table.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeMode.Stretch)
-        
-        layout.addWidget(self.signal_noise_table)
         self.stack.addWidget(w)
-
-    def _create_signal_noise_cell(self, value):
-        """
-        신호 노이즈 테이블 셀 위젯을 생성합니다.
-
-        매개변수:
-            value: 초기 노이즈 값
-
-        반환값:
-            QDoubleSpinBox: 생성된 스핀박스 위젯
-        """
-        spin = QDoubleSpinBox()
-        spin.setRange(0, 1.0)
-        spin.setSingleStep(0.001)
-        spin.setDecimals(5)
-        spin.setValue(value)
-        spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-        spin.lineEdit().setAlignment(Qt.AlignmentFlag.AlignCenter)
-        return spin
-
-    def on_signal_noise_changed(self, value):
-        """
-        신호 노이즈 값 변경 시 호출됩니다.
-
-        매개변수:
-            value: 새 노이즈 값
-
-        첫 번째 행(ALL)이나 첫 번째 열(Ctrl)의 값 변경 시
-        해당 행/열의 모든 셀에 같은 값이 적용됩니다.
-        """
-        sender_spin = self.sender()
-        if not sender_spin: return
-
-        r = sender_spin.property("row")
-        c = sender_spin.property("col")
-
-        table = self.signal_noise_table
-        ships = current_project.ships
-
-        rows_model = [r] if r > 0 else range(1, len(ships) + 1)
-        cols_model = [c] if c > 0 else range(1, len(self.talkers) + 1)
-        if r == 0 and c == 0:
-            rows_model = range(1, len(ships) + 1)
-            cols_model = range(1, len(self.talkers) + 1)
-
-        for row_idx in rows_model:
-            for col_idx in cols_model:
-                ship = ships[row_idx - 1]
-                talker = self.talkers[col_idx - 1]
-                ship.variances[talker] = value
-
-        if r == 0 or c == 0:
-            rows_ui = range(table.rowCount()) if r == 0 else [r]
-            cols_ui = range(table.columnCount()) if c == 0 else [c]
-            if r == 0 and c == 0:
-                rows_ui = range(table.rowCount())
-                cols_ui = range(table.columnCount())
-
-            for row in rows_ui:
-                for col in cols_ui:
-                    if row == r and col == c: continue
-                    self._set_signal_noise_spinbox(row, col, value)
-    
-    def _set_signal_noise_spinbox(self, r, c, value):
-        """
-        특정 셀의 스핀박스 값을 설정합니다.
-
-        시그널 발생 없이 값을 변경합니다.
-
-        매개변수:
-            r: 행 인덱스
-            c: 열 인덱스
-            value: 설정할 값
-        """
-        widget = self.signal_noise_table.cellWidget(r, c)
-        if widget and isinstance(widget, QDoubleSpinBox):
-            widget.blockSignals(True)
-            widget.setValue(value)
-            widget.blockSignals(False)
-
     def pick_color(self, btn, attr):
         """
         색상 선택 다이얼로그를 표시하고 선택된 색상을 적용합니다.
@@ -977,7 +844,6 @@ class SettingsDialog(QDialog):
         current_project.settings.traveled_path_thickness = self.spin_travel_th.value()
 
         # Reception Model 설정 저장
-        current_project.settings.reception_model_enabled = self.chk_reception_enabled.isChecked()
         preset_names = ["realistic", "stable", "harsh", "custom"]
         current_project.settings.reception_preset = preset_names[self.combo_preset.currentIndex()]
 

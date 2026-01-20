@@ -110,7 +110,6 @@ class ProjectSettings:
         ais_fragment_delivery_prob: AIS fragment 전달 확률
 
     수신 모델 설정:
-        reception_model_enabled: 거리 기반 수신 모델 활성화
         reception_preset: 수신 모델 프리셋
         ais_reception: AIS 수신 설정
         radar_detect: 레이더 탐지 설정
@@ -155,7 +154,6 @@ class ProjectSettings:
     ais_fragment_delivery_prob: float = 0.95  # 각 fragment의 전달 확률 (0~1)
 
     # 거리 기반 수신 모델 설정
-    reception_model_enabled: bool = True  # 수신 모델 활성화
     reception_preset: str = "realistic"  # 프리셋: "realistic", "stable", "harsh", "custom"
 
     # 각 신호 유형별 수신 설정

@@ -1320,9 +1320,6 @@ class SimulationWorker(QObject):
         반환값:
             드롭아웃이면 True
         """
-        if not self.proj.settings.reception_model_enabled:
-            # 기존 고정 확률 방식으로 폴백
-            return self.check_dropout(stype)
 
         if stype == "AIVDM":
             config = self.proj.settings.ais_reception

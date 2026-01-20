@@ -1105,9 +1105,19 @@ class MainWindow(QMainWindow):
                 el.setZValue(2)
                 self.scene.addItem(el)
 
-            # Single Point + Heading 모드: i, f 라벨 표시하지 않음
+            # Single Point + Heading 모드: 헤딩 각도 라벨 표시
             # 일반 경로 모드: 시작점('i')과 끝점('f') 라벨 표시
-            if s.initial_heading is None and s.raw_points:
+            if s.initial_heading is not None and s.raw_points:
+                # 헤딩 각도 라벨 표시 (점 우측 상단)
+                pt = s.raw_points[0]
+                heading_text = f"{s.initial_heading:.1f}°"
+                th = QGraphicsTextItem(heading_text)
+                th.setDefaultTextColor(Qt.GlobalColor.black)
+                th.setPos(pt[0] + 8, pt[1] - 20)
+                th.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
+                th.setZValue(3)
+                self.scene.addItem(th)
+            elif s.raw_points:
                 start_pt = s.raw_points[0]
                 end_pt = s.raw_points[-1]
                 ti = QGraphicsTextItem("i")
