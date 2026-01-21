@@ -70,7 +70,7 @@ class SettingsDialog(QDialog):
         
         main_h = QHBoxLayout(self)
         self.list_widget = QListWidget()
-        self.list_widget.addItems(["Appearance", "Reception Model", "Object", "Signal"])
+        self.list_widget.addItems(["Appearance", "Reception Model", "Object", "Signal", "Camera & Redis"])
         self.list_widget.setFixedWidth(150)
         
         line = QFrame()
@@ -87,6 +87,7 @@ class SettingsDialog(QDialog):
         self.init_dropout()
         self.init_object()
         self.init_signal()
+        self.init_camera_redis()
         self._bind_sim_state()
         
         self.list_widget.currentRowChanged.connect(self.stack.setCurrentIndex)
@@ -792,6 +793,139 @@ class SettingsDialog(QDialog):
         layout.addWidget(ais_frag_group)
         # --- End AIS Fragment Settings ---
         self.stack.addWidget(w)
+
+    def init_camera_redis(self):
+        """
+        카메라 및 Redis 설정 페이지를 초기화합니다.
+
+        카메라 높이, EO/IR 카메라 활성화, Redis 전송 설정을 포함합니다.
+        """
+        w = QWidget()
+        layout = QVBoxLayout(w)
+
+        # --- Camera Settings Group ---
+        camera_group = QGroupBox("Camera Settings")
+        camera_layout = QFormLayout(camera_group)
+
+        # 카메라 높이
+        self.spin_camera_height = QDoubleSpinBox()
+        self.spin_camera_height.setRange(1.0, 100.0)
+        self.spin_camera_height.setSingleStep(1.0)
+        self.spin_camera_height.setDecimals(1)
+        self.spin_camera_height.setSuffix(" m")
+        self.spin_camera_height.setValue(getattr(current_project.settings, 'camera_height_m', 15.0))
+        height_label = QLabel("Camera Height (above sea level):")
+        height_label.setToolTip("Height of the camera mounted on Own Ship, measured from sea level.")
+        camera_layout.addRow(height_label, self.spin_camera_height)
+
+        # EO 카메라 활성화
+        self.chk_eo_enabled = QCheckBox()
+        self.chk_eo_enabled.setChecked(getattr(current_project.settings, 'eo_camera_enabled', True))
+        eo_label = QLabel("EO Camera Enabled:")
+        eo_label.setToolTip("EO Camera: 3840x1080 resolution, ±90° FOV")
+        camera_layout.addRow(eo_label, self.chk_eo_enabled)
+
+        # IR 카메라 활성화
+        self.chk_ir_enabled = QCheckBox()
+        self.chk_ir_enabled.setChecked(getattr(current_project.settings, 'ir_camera_enabled', True))
+        ir_label = QLabel("IR Camera Enabled:")
+        ir_label.setToolTip("IR Camera: 1536x512 resolution, ±55° FOV")
+        camera_layout.addRow(ir_label, self.chk_ir_enabled)
+
+        layout.addWidget(camera_group)
+
+        # --- Redis Settings Group ---
+        redis_group = QGroupBox("Redis Bbox Transmission")
+        redis_layout = QFormLayout(redis_group)
+
+        # Redis 활성화
+        self.chk_redis_enabled = QCheckBox()
+        self.chk_redis_enabled.setChecked(getattr(current_project.settings, 'redis_enabled', False))
+        redis_enabled_label = QLabel("Enable Redis Transmission:")
+        redis_enabled_label.setToolTip("Send bbox data to Redis server (infer:eo, infer:ir)")
+        redis_layout.addRow(redis_enabled_label, self.chk_redis_enabled)
+
+        # Redis Host 안내 (시뮬레이션 탭의 IP 사용)
+        host_info_label = QLabel("Host: <i>Uses Simulation tab IP address</i>")
+        host_info_label.setTextFormat(Qt.TextFormat.RichText)
+        host_info_label.setToolTip("Redis host is automatically set to the IP address entered in the Simulation tab")
+        redis_layout.addRow("", host_info_label)
+
+        # Redis 포트
+        self.spin_redis_port = QSpinBox()
+        self.spin_redis_port.setRange(1, 65535)
+        self.spin_redis_port.setValue(getattr(current_project.settings, 'redis_port', 6379))
+        redis_port_label = QLabel("Redis Port:")
+        redis_layout.addRow(redis_port_label, self.spin_redis_port)
+
+        # Redis 비밀번호
+        from PyQt6.QtWidgets import QLineEdit
+        self.edit_redis_password = QLineEdit()
+        self.edit_redis_password.setText(getattr(current_project.settings, 'redis_password', ''))
+        self.edit_redis_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.edit_redis_password.setPlaceholderText("(optional)")
+        redis_password_label = QLabel("Redis Password:")
+        redis_layout.addRow(redis_password_label, self.edit_redis_password)
+
+        # Redis TLS
+        self.chk_redis_tls = QCheckBox()
+        self.chk_redis_tls.setChecked(getattr(current_project.settings, 'redis_use_tls', False))
+        redis_tls_label = QLabel("Use TLS:")
+        redis_layout.addRow(redis_tls_label, self.chk_redis_tls)
+
+        layout.addWidget(redis_group)
+
+        # Info label
+        info_label = QLabel(
+            "<b>Bbox Format:</b><br>"
+            "Key: <code>infer:eo</code> / <code>infer:ir</code><br>"
+            "Value: <code>{\"prediction\": [[left, top, right, bottom, conf, class], ...]}</code>"
+        )
+        info_label.setWordWrap(True)
+        info_label.setTextFormat(Qt.TextFormat.RichText)
+        layout.addWidget(info_label)
+
+        layout.addStretch()
+        self.stack.addWidget(w)
+
+    def _test_redis_connection(self):
+        """Redis 연결을 테스트합니다.
+
+        Note: 실제 연결 시에는 시뮬레이션 탭의 IP가 사용됩니다.
+        테스트는 localhost로 진행합니다.
+        """
+        try:
+            import redis
+            # 테스트는 localhost로 진행 (실제 연결 시 시뮬레이션 탭 IP 사용)
+            host = '127.0.0.1'
+            port = self.spin_redis_port.value()
+            password = self.edit_redis_password.text() or None
+            use_tls = self.chk_redis_tls.isChecked()
+
+            if use_tls:
+                client = redis.Redis(
+                    host=host, port=port, password=password,
+                    ssl=True, ssl_cert_reqs=None,
+                    socket_connect_timeout=5.0
+                )
+            else:
+                client = redis.Redis(
+                    host=host, port=port, password=password,
+                    socket_connect_timeout=5.0
+                )
+
+            client.ping()
+            client.close()
+            QMessageBox.information(
+                self, "Success",
+                f"Connected to Redis at {host}:{port}\n\n"
+                "Note: During simulation, the IP from Simulation tab will be used."
+            )
+        except ImportError:
+            QMessageBox.warning(self, "Error", "Redis module not installed.\nInstall with: pip install redis")
+        except Exception as e:
+            QMessageBox.warning(self, "Connection Failed", f"Failed to connect to Redis:\n{str(e)}")
+
     def pick_color(self, btn, attr):
         """
         색상 선택 다이얼로그를 표시하고 선택된 색상을 적용합니다.
@@ -864,3 +998,19 @@ class SettingsDialog(QDialog):
 
         current_project.settings.ais_fragment_delivery_prob = self.spin_fragment_delivery.value()
 
+        # Camera & Redis 설정 저장
+        current_project.settings.camera_height_m = self.spin_camera_height.value()
+        current_project.settings.eo_camera_enabled = self.chk_eo_enabled.isChecked()
+        current_project.settings.ir_camera_enabled = self.chk_ir_enabled.isChecked()
+        current_project.settings.redis_enabled = self.chk_redis_enabled.isChecked()
+        # redis_host는 시뮬레이션 탭의 IP를 사용하므로 여기서 저장하지 않음
+        current_project.settings.redis_port = self.spin_redis_port.value()
+        current_project.settings.redis_password = self.edit_redis_password.text()
+        current_project.settings.redis_use_tls = self.chk_redis_tls.isChecked()
+
+    def accept(self):
+        """
+        OK 버튼 클릭 시 변경사항을 적용하고 다이얼로그를 닫습니다.
+        """
+        self.apply_changes()
+        super().accept()

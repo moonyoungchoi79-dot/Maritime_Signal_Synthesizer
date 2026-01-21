@@ -53,7 +53,8 @@ from app.workers.rtg_worker import RTGWorker
 from app.ui.map.sim_map_view import SimMapView
 from app.ui.dialogs.rtg_dialog import RTGDialog
 from app.ui.widgets.time_input_widget import TimeInputWidget
-from app.ui.widgets.panorama_view import PanoramaView
+from app.ui.widgets.panorama_view import PanoramaView, DualPanoramaView
+from app.core.camera_projection import DualCameraBboxGenerator
 from app.ui.widgets import message_box as msgbox
 import app.core.state as app_state
 
@@ -172,11 +173,12 @@ class TargetInfoDialog(QDialog):
         scroll_layout.setSpacing(8)
 
         # Panorama view for camera detections (moved to top)
-        pano_group = QGroupBox("CAMERA Panorama View (-90° to +90°)")
+        # 듀얼 카메라 (EO/IR) 파노라마 뷰
+        pano_group = QGroupBox("CAMERA Panorama View (EO: ±90° / IR: ±55°)")
         pano_layout = QVBoxLayout(pano_group)
-        self.panorama_view = PanoramaView()
-        self.panorama_view.setMinimumHeight(120)
-        self.panorama_view.setMaximumHeight(150)
+        self.panorama_view = DualPanoramaView()
+        self.panorama_view.setMinimumHeight(200)
+        self.panorama_view.setMaximumHeight(300)
         pano_layout.addWidget(self.panorama_view)
         scroll_layout.addWidget(pano_group)
 
@@ -272,6 +274,10 @@ class TargetInfoDialog(QDialog):
         btn_box.addWidget(self.btn_high)
         btn_box.addWidget(self.btn_close)
         layout.addLayout(btn_box)
+
+        # Cache DualCameraBboxGenerator for performance (expensive to create)
+        self._bbox_generator = None
+        self._bbox_generator_camera_height = None
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_info)
@@ -570,11 +576,10 @@ class TargetInfoDialog(QDialog):
         return ((deg + 180) % 360) - 180
 
     def _update_panorama_detections(self):
-        """Calculate camera detections from this ship's perspective.
+        """Calculate camera detections from this ship's perspective using Homography-based projection.
 
-        The ship is modeled as a 3D box (length x beam x height).
-        The visible width depends on which faces are visible,
-        determined by the angle between observer's view direction and target's heading.
+        Uses the DualCameraBboxGenerator to project ship 3D models onto EO/IR panorama views.
+        EO camera: ±90° FOV, IR camera: ±55° FOV.
         Ships beyond camera d1 distance are filtered out.
         """
         from app.core.geometry import ecef_heading, ecef_distance
@@ -591,12 +596,20 @@ class TargetInfoDialog(QDialog):
         observer_dyn = self.worker.dynamic_ships[self.ship_idx]
         observer_hdg = observer_dyn['hdg']
 
-        # Get camera d1 distance (max visibility range)
-        camera_d1_nm = current_project.settings.camera_reception.d1
+        # Get camera settings
+        settings = current_project.settings
+        camera_d1_nm = settings.camera_reception.d1
         camera_d1_m = camera_d1_nm * 1852.0  # Convert NM to meters
+        camera_height = getattr(settings, 'camera_height_m', 15.0)
 
-        detections = []
-        EPS = 1e-3
+        # Reuse cached bbox generator (only recreate if camera height changed)
+        if self._bbox_generator is None or self._bbox_generator_camera_height != camera_height:
+            self._bbox_generator = DualCameraBboxGenerator(camera_height_m=camera_height)
+            self._bbox_generator_camera_height = camera_height
+        bbox_generator = self._bbox_generator
+
+        eo_detections = []
+        ir_detections = []
 
         # Loop through all other ships
         for other_ship in current_project.ships:
@@ -617,72 +630,63 @@ class TargetInfoDialog(QDialog):
             # Calculate relative bearing
             rel_bearing = self._wrap_to_180(bearing_true - observer_hdg)
 
-            # Skip if outside FOV [-90, +90]
-            if rel_bearing < -90 or rel_bearing > 90:
-                continue
-
             # Calculate distance
             dist_m = ecef_distance(
                 observer_dyn['x'], observer_dyn['y'], observer_dyn['z'],
                 other_dyn['x'], other_dyn['y'], other_dyn['z']
             )
-            range_m = max(dist_m, EPS)
 
             # Skip if ship is beyond camera d1 distance
             if dist_m >= camera_d1_m:
                 continue
 
-            # Calculate panorama coordinates
-            x_norm = (rel_bearing + 90.0) / 180.0
-            cx_px = x_norm * self.PANO_W_PX
-            cy_px = self.CY_RATIO * self.PANO_H_PX
-
             # Ship dimensions
             length_m = getattr(other_ship, 'length_m', 300.0)
             beam_m = getattr(other_ship, 'beam_m', 40.0)
             height_m = getattr(other_ship, 'height_m', 30.0)
+            ship_dims = (length_m, beam_m, height_m)
+            ship_class = getattr(other_ship, 'ship_class', 'CONTAINER')
 
-            # Calculate the viewing angle relative to target ship's heading
+            # Calculate relative position in meters
+            rel_bearing_rad = math.radians(rel_bearing)
+            target_rel_x = dist_m * math.sin(rel_bearing_rad)  # right (starboard)
+            target_rel_y = dist_m * math.cos(rel_bearing_rad)  # front (bow)
+
+            # Target ship's relative heading
             tgt_heading = other_dyn['hdg']
+            target_heading_rel = math.radians(tgt_heading - observer_hdg)
 
-            # Angle from target ship's bow to observer
-            bearing_from_target = (bearing_true + 180.0) % 360.0
-            view_angle = self._wrap_to_180(bearing_from_target - tgt_heading)
+            # EO camera bbox (±90° FOV)
+            if getattr(settings, 'eo_camera_enabled', True):
+                if -90.0 <= rel_bearing <= 90.0:
+                    eo_bbox = bbox_generator.generate_bbox(
+                        ship_dims, target_rel_x, target_rel_y, target_heading_rel, "EO"
+                    )
+                    if eo_bbox:
+                        eo_det = bbox_generator.generate_detection_dict(
+                            other_ship.idx, other_ship.name, ship_class,
+                            rel_bearing, eo_bbox, "EO"
+                        )
+                        eo_detections.append(eo_det)
 
-            # Calculate projected width based on view angle
-            # |sin| gives contribution from side (length), |cos| gives contribution from front/back (beam)
-            view_angle_rad = math.radians(view_angle)
-            projected_width_m = abs(math.sin(view_angle_rad)) * length_m + abs(math.cos(view_angle_rad)) * beam_m
+            # IR camera bbox (±55° FOV)
+            if getattr(settings, 'ir_camera_enabled', True):
+                if -55.0 <= rel_bearing <= 55.0:
+                    ir_bbox = bbox_generator.generate_bbox(
+                        ship_dims, target_rel_x, target_rel_y, target_heading_rel, "IR"
+                    )
+                    if ir_bbox:
+                        ir_det = bbox_generator.generate_detection_dict(
+                            other_ship.idx, other_ship.name, ship_class,
+                            rel_bearing, ir_bbox, "IR"
+                        )
+                        ir_detections.append(ir_det)
 
-            # Height is always the same (viewing from sea level)
-            projected_height_m = height_m
-
-            # Convert to pixels based on distance
-            w_px = max(self.W_MIN, min(self.W_MAX, self.K_H * (projected_width_m / range_m)))
-            h_px = max(self.H_MIN, min(self.H_MAX, self.K_H * (projected_height_m / range_m)))
-
-            # Clamp bbox to panorama bounds
-            x1 = max(0, cx_px - w_px / 2)
-            x2 = min(self.PANO_W_PX, cx_px + w_px / 2)
-            y1 = max(0, cy_px - h_px / 2)
-            y2 = min(self.PANO_H_PX, cy_px + h_px / 2)
-            w_px = x2 - x1
-            h_px = y2 - y1
-            cx_px = (x1 + x2) / 2
-            cy_px = (y1 + y2) / 2
-
-            detection = {
-                'ship_idx': other_ship.idx,
-                'ship_name': other_ship.name,
-                'rel_bearing': rel_bearing,
-                'cx_px': cx_px,
-                'cy_px': cy_px,
-                'w_px': w_px,
-                'h_px': h_px
-            }
-            detections.append(detection)
-
-        self.panorama_view.set_detections(detections)
+        # Set detections with dual camera format
+        self.panorama_view.set_detections({
+            'eo': eo_detections,
+            'ir': ir_detections
+        })
 
     def change_speed(self):
         ship = current_project.get_ship_by_idx(self.ship_idx)

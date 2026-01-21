@@ -44,6 +44,10 @@ from app.core.geometry import (
     ecef_interpolate, path_points_to_ecef
 )
 from app.core.nmea import calculate_checksum
+from app.core.camera_projection import (
+    DualCameraBboxGenerator, EO_PANO_SPEC, IR_PANO_SPEC, get_ship_class_id
+)
+from app.core.redis_transmitter import RedisBboxTransmitter, RedisConfig
 
 # pyais를 사용한 AIS 인코딩
 try:
@@ -166,7 +170,38 @@ class SimulationWorker(QObject):
         self.camera_burst_states = {}
 
         # 현재 프레임의 카메라 탐지 데이터 (파노라마 뷰용)
-        self.camera_detections = []
+        self.camera_detections = []  # 기존 단일 카메라용 (하위 호환)
+        self.eo_detections = []  # EO 카메라 탐지 데이터
+        self.ir_detections = []  # IR 카메라 탐지 데이터
+
+        # 듀얼 카메라 bbox 생성기 초기화
+        camera_height = getattr(self.proj.settings, 'camera_height_m', 15.0)
+        self.bbox_generator = DualCameraBboxGenerator(camera_height_m=camera_height)
+
+        # Redis 전송기 초기화
+        self.redis_transmitter = None
+        self._init_redis_transmitter()
+
+    def _init_redis_transmitter(self):
+        """Redis 전송기를 초기화합니다.
+
+        시뮬레이션 탭에서 입력한 IP를 사용하고, Redis 포트는 설정에서 가져옵니다.
+        """
+        settings = self.proj.settings
+        redis_enabled = getattr(settings, 'redis_enabled', False)
+        if redis_enabled:
+            # 시뮬레이션 탭의 IP 사용 (UDP 전송과 동일한 서버)
+            redis_host = self.ip
+            redis_port = getattr(settings, 'redis_port', 6379)
+
+            config = RedisConfig(
+                enabled=True,
+                host=redis_host,
+                port=redis_port,
+                password=getattr(settings, 'redis_password', '') or None,
+                use_tls=getattr(settings, 'redis_use_tls', False)
+            )
+            self.redis_transmitter = RedisBboxTransmitter(config)
 
     def reset_triggered_event(self, event_id: str):
         """
@@ -440,6 +475,8 @@ class SimulationWorker(QObject):
 
                 # 이번 프레임의 카메라 탐지 데이터 초기화
                 self.camera_detections = []
+                self.eo_detections = []
+                self.ir_detections = []
 
                 current_positions = {}
 
@@ -476,8 +513,22 @@ class SimulationWorker(QObject):
                 if current_real_time - self.last_gui_update_time > 0.05:
                     self.positions_updated.emit(current_positions)
                     # 카메라 탐지 데이터 전송 (C-3: GUI 업데이트와 함께 스로틀링)
-                    if self.camera_detections:
-                        self.camera_detections_updated.emit(list(self.camera_detections))
+                    # 듀얼 카메라 데이터를 합쳐서 전송 (하위 호환 + 신규)
+                    all_detections = {
+                        'legacy': list(self.camera_detections),
+                        'eo': list(self.eo_detections),
+                        'ir': list(self.ir_detections)
+                    }
+                    if self.camera_detections or self.eo_detections or self.ir_detections:
+                        self.camera_detections_updated.emit([all_detections])
+
+                    # Redis로 bbox 전송
+                    if self.redis_transmitter and self.redis_transmitter.is_connected():
+                        if self.eo_detections:
+                            self.redis_transmitter.send_detections("EO", self.eo_detections)
+                        if self.ir_detections:
+                            self.redis_transmitter.send_detections("IR", self.ir_detections)
+
                     self.last_gui_update_time = current_real_time
 
                 m += 1
@@ -1400,22 +1451,26 @@ class SimulationWorker(QObject):
         # 레이더 TTM 신호 생성
         self.try_emit_distance_based(self.gen_ttm(base, state), "RATTM", jitter_ts, tgt.idx, dist_nm)
 
-        # 카메라 신호 생성 (사양 B-1)
+        # 카메라 신호 생성 (사양 B-1) - 듀얼 카메라 (EO/IR) 지원
         if ship and own_dyn and tgt_dyn:
             if ship.signals_enabled.get("Camera", True):
-                cam_raw, detection = self.gen_cam_signal(own_dyn, tgt, tgt_dyn, dist_nm)
-                if cam_raw and detection:
-                    current_sim_time = (jitter_ts - self.proj.start_time).total_seconds()
-                    # 인터벌 체크
-                    interval = ship.signal_intervals.get("Camera", 1.0)
-                    last_time = self.last_emission_times.get((ship.idx, "Camera"), -float('inf'))
-                    if (current_sim_time + 1e-9) >= (last_time + interval):
-                        # 버스트 지원 드롭아웃 체크 (B-4, B-5)
-                        if not self.check_camera_dropout_with_burst(tgt.idx, dist_nm, current_sim_time):
+                current_sim_time = (jitter_ts - self.proj.start_time).total_seconds()
+                interval = ship.signal_intervals.get("Camera", 1.0)
+                last_time = self.last_emission_times.get((ship.idx, "Camera"), -float('inf'))
+
+                if (current_sim_time + 1e-9) >= (last_time + interval):
+                    # 버스트 지원 드롭아웃 체크 (B-4, B-5)
+                    if not self.check_camera_dropout_with_burst(tgt.idx, dist_nm, current_sim_time):
+                        # 기존 단일 카메라 신호 생성 (NMEA 전송용, 하위 호환)
+                        cam_raw, detection = self.gen_cam_signal(own_dyn, tgt, tgt_dyn, dist_nm)
+                        if cam_raw and detection:
                             self.send_nmea(cam_raw, jitter_ts)
-                            self.last_emission_times[(ship.idx, "Camera")] = current_sim_time
-                            # 파노라마 뷰용 탐지 데이터 추가
                             self.camera_detections.append(detection)
+
+                        # 듀얼 카메라 bbox 생성 (Homography 기반)
+                        self._generate_dual_camera_detections(own_dyn, tgt, tgt_dyn, ship)
+
+                        self.last_emission_times[(ship.idx, "Camera")] = current_sim_time
 
     def try_emit(self, raw, stype, ts_obj, ship_idx):
         """
@@ -1787,3 +1842,72 @@ class SimulationWorker(QObject):
                     }
             return True
         return False
+
+    def _generate_dual_camera_detections(self, own_dyn, tgt_ship, tgt_dyn, ship):
+        """
+        듀얼 카메라 (EO/IR) bbox를 생성합니다.
+
+        Homography 기반 원통 투영을 사용하여 선박의 8개 꼭짓점을
+        각 카메라의 파노라마 이미지로 투영합니다.
+
+        매개변수:
+            own_dyn: OwnShip 동적 상태
+            tgt_ship: 타겟 선박 객체
+            tgt_dyn: 타겟 선박 동적 상태
+            ship: 선박 데이터 객체
+        """
+        # OwnShip에서 타겟까지의 진방위 계산
+        bearing_true = ecef_heading(own_dyn['x'], own_dyn['y'], own_dyn['z'],
+                                    tgt_dyn['x'], tgt_dyn['y'], tgt_dyn['z'])
+        own_heading = own_dyn['hdg']
+        rel_bearing = wrap_to_180(bearing_true - own_heading)
+
+        # 상대 위치 계산 (미터)
+        dist_m = ecef_distance(own_dyn['x'], own_dyn['y'], own_dyn['z'],
+                               tgt_dyn['x'], tgt_dyn['y'], tgt_dyn['z'])
+
+        # 상대 좌표 계산 (자선 기준)
+        rel_bearing_rad = math.radians(rel_bearing)
+        target_rel_x = dist_m * math.sin(rel_bearing_rad)  # 우현 방향 (right)
+        target_rel_y = dist_m * math.cos(rel_bearing_rad)  # 전방 방향 (front)
+
+        # 타겟 선박의 상대 헤딩
+        tgt_heading = tgt_dyn['hdg']
+        target_heading_rel = math.radians(tgt_heading - own_heading)
+
+        # 선박 치수
+        length_m = getattr(tgt_ship, 'length_m', 300.0)
+        beam_m = getattr(tgt_ship, 'beam_m', 40.0)
+        height_m = getattr(tgt_ship, 'height_m', 30.0)
+        ship_dims = (length_m, beam_m, height_m)
+        ship_class = getattr(tgt_ship, 'ship_class', 'CONTAINER')
+
+        settings = self.proj.settings
+
+        # EO 카메라 bbox 생성 (FOV: ±90°)
+        if getattr(settings, 'eo_camera_enabled', True):
+            eo_half_fov = 90.0
+            if -eo_half_fov <= rel_bearing <= eo_half_fov:
+                eo_bbox = self.bbox_generator.generate_bbox(
+                    ship_dims, target_rel_x, target_rel_y, target_heading_rel, "EO"
+                )
+                if eo_bbox:
+                    eo_det = self.bbox_generator.generate_detection_dict(
+                        tgt_ship.idx, tgt_ship.name, ship_class,
+                        rel_bearing, eo_bbox, "EO"
+                    )
+                    self.eo_detections.append(eo_det)
+
+        # IR 카메라 bbox 생성 (FOV: ±55°)
+        if getattr(settings, 'ir_camera_enabled', True):
+            ir_half_fov = 55.0
+            if -ir_half_fov <= rel_bearing <= ir_half_fov:
+                ir_bbox = self.bbox_generator.generate_bbox(
+                    ship_dims, target_rel_x, target_rel_y, target_heading_rel, "IR"
+                )
+                if ir_bbox:
+                    ir_det = self.bbox_generator.generate_detection_dict(
+                        tgt_ship.idx, tgt_ship.name, ship_class,
+                        rel_bearing, ir_bbox, "IR"
+                    )
+                    self.ir_detections.append(ir_det)

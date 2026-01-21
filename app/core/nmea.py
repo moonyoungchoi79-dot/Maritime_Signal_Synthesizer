@@ -72,7 +72,6 @@ def _int_to_twos_complement(value, bits):
     """
     정수를 2의 보수(Two's Complement) 표현으로 변환합니다.
 
-    2의 보수는 컴퓨터에서 음수를 표현하는 표준 방식입니다.
     AIS 메시지에서 위도, 경도, 선회율(ROT) 등 음수가 가능한 필드에 사용됩니다.
 
     변환 과정:

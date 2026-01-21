@@ -166,3 +166,15 @@ class ProjectSettings:
     camera_reception: ReceptionModelConfig = field(default_factory=lambda: ReceptionModelConfig(
         d0=1.0, d1=5.0, p0=0.01, p1=0.90
     ))
+
+    # 카메라 설정
+    camera_height_m: float = 15.0  # 카메라 높이 (수면 기준, 미터)
+    eo_camera_enabled: bool = True  # EO 카메라 활성화
+    ir_camera_enabled: bool = True  # IR 카메라 활성화
+
+    # Redis 전송 설정
+    redis_enabled: bool = False  # Redis 전송 활성화
+    redis_host: str = "127.0.0.1"  # Redis 서버 주소
+    redis_port: int = 6379  # Redis 서버 포트
+    redis_password: str = ""  # Redis 비밀번호 (빈 문자열이면 없음)
+    redis_use_tls: bool = False  # TLS 사용 여부
