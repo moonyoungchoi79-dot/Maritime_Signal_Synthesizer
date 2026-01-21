@@ -1,0 +1,126 @@
+# [Task] Maritime Signal Synthesizer: ECEF 기반 파노라마 BBox 생성 및 Redis 전송 구현
+
+## 1. 프로젝트 상황 및 목표
+이 프로젝트는 ECEF 좌표계를 기반으로 선박을 시뮬레이션합니다.
+**자선(Own Ship)**에 장착된 두 개의 파노라마 카메라(EO, IR)가 시야각 내에 들어온 **타선(Target Ship)**을 인식하여 **2D Bounding Box(BBox)**를 생성하고, 이를 **Redis**로 실시간 전송하는 기능을 구현해야 합니다.
+
+현재 투영 관련 로직 파일이 전무하므로, 아래 제공하는 **수학적 명세(Mathematical Specs)**를 바탕으로 필요한 클래스와 함수를 **새로 작성**하여 구현하십시오.
+
+## 2. 구현해야 할 신규 모듈 (New Modules)
+
+### A. `app/core/projection.py` (신규 생성)
+이 파일에 3D 좌표 변환 및 투영 로직을 모두 구현합니다.
+
+**1. 클래스 `Ship3DModel`**
+타선의 제원 정보를 받아 3D 형상(8개 꼭짓점)을 생성합니다.
+* **입력**: 길이(L), 폭(W), 높이(H), 선수(Bow), 선미(Stern), 좌현(Port), 우현(Stbd)
+* **좌표계 (Body Frame)**: 선박 중심 기준. X: 선수(+), Y: 우현(+), Z: 하방(+) (NED 기준)
+* **로직**:
+    * Bow/Stern/Port/Stbd/Height 정보를 이용해 직육면체의 8개 꼭짓점 $(x, y, z)$ 좌표 배열 생성.
+
+**2. 클래스 `PanoramaCamera`**
+3D 점을 원통형(Cylindrical) 이미지 평면으로 투영합니다.
+* **초기화**: `__init__(width, height, fov_hor_deg)`
+* **투영 메서드**: `project(points_body_frame)`
+    * 입력: 자선 Body Frame 기준의 3D 점 $(x, y, z)$ 리스트
+    * **수학적 투영 공식**:
+        * $\theta = \arctan2(y, x)$ (수평 각도, 라디안)
+        * $\phi = \arctan2(z, \sqrt{x^2 + y^2})$ (수직 각도, 라디안)
+        * $u = (\theta / \text{FOV}_{hor\_rad} + 0.5) \times \text{Width}$
+        * $v = (\phi / \text{FOV}_{ver\_rad} + 0.5) \times \text{Height}$
+        * (참고: $\text{FOV}_{ver}$는 화면 비율에 맞춰 계산)
+* **BBox 추출**: 투영된 점들의 $min(u), min(v), max(u), max(v)$ 계산 및 이미지 범위 내 Clamping.
+
+### B. `app/core/geometry_utils.py` (신규 혹은 기존 `geometry.py` 확장)
+ECEF 좌표를 자선 Body Frame으로 변환하는 함수를 구현합니다.
+
+**함수 `ecef_to_body_frame(target_ecef, own_ecef, own_lat, own_lon, own_heading)`**
+1.  **ECEF 변환**: 타선 위치 - 자선 위치 = $\vec{D}_{ecef}$
+2.  **ECEF to ENU 회전**: 자선의 위도($\phi$), 경도($\lambda$)를 사용하여 회전 행렬 $R_{ecef}^{enu}$ 생성 및 적용.
+    * (수식 생략, 일반적인 ECEF->ENU 변환 적용)
+3.  **ENU to Body 회전**: 자선의 Heading($\psi$)을 사용하여 회전 행렬 $R_{enu}^{body}$ 적용.
+    * $x_{body} = x_{enu}\cos(90-\psi) + y_{enu}\sin(90-\psi)$ 등 Heading 적용.
+4.  **최종 결과**: 자선 기준의 상대 좌표 $(x, y, z)$ 반환.
+
+---
+
+## 3. Redis 통신 모듈 및 설정
+
+### A. Redis 설정
+`app/core/models/settings.py`에 다음 필드를 추가하고 UI에서 입력받도록 하십시오.
+* `redis_ip` (str, default="127.0.0.1")
+* `redis_port` (int, default=6379)
+* `fade_out_distance` 이건 이미 구현되어있음. Setting에서 Camera신호의 fade out distance 값을 그대로 갖다 쓰게 할 것.
+
+### B. 전송 로직 (Redis Sender)
+다음 코드를 참고하여 `app/core/network/redis_manager.py`를 작성하십시오.
+
+```python
+import redis
+import json
+
+class RedisBBoxSender:
+    def __init__(self, ip, port):
+        # 연결 풀 생성
+        self.pool = redis.ConnectionPool(host=ip, port=port, db=0, socket_timeout=1.0)
+        self.client = redis.Redis(connection_pool=self.pool)
+
+    def send(self, channel, bbox_list):
+        """
+        bbox_list: [[left, top, right, bottom, confidence, class], ...]
+        """
+        data = {
+            "prediction": bbox_list
+        }
+        try:
+            # JSON 직렬화 및 전송
+            self.client.set(channel, json.dumps(data))
+        except Exception as e:
+            print(f"Redis Error: {e}")
+
+아래는 실제 다른 프로그램에서 사용되었던 Redis 코드입니다.(당연하지만 이걸 그대로 써서는 절대!! 안됨!! 참고만!!!)
+
+import redis
+import json
+
+def get_redis_client(ip, port, password=None, redis_tls=False):
+    if redis_tls:
+        redis_pool = redis.ConnectionPool(
+            host=ip,
+            port=port,
+            db=0,
+            socket_connect_timeout=5.0,
+            socket_timeout=5.0,
+            connection_class=redis.SSLConnection,
+            ssl_cert_reqs=None,
+            password=password,
+        )
+    else:
+        redis_pool = redis.ConnectionPool(
+            host=ip,
+            port=port,
+            db=0,
+            socket_connect_timeout=5.0,
+            socket_timeout=5.0,
+        )
+    return redis.Redis(connection_pool=redis_pool)
+
+redis_ip = "10.0.100.20"
+redis_port = 6501
+redis_client = redis.Redis(host=redis_ip, port=redis_port, decode_responses=True)
+
+bbox_info_list = []
+
+# bbox left_top: (30, 680) , right_bottom: (110, 710) 이라면,
+left = 30
+right = 110
+top = 680
+bottom = 710
+confidence = 0.9
+class = 1
+cur_bbox_info = [left, top, right, bottom, confidence, class]
+bbox_info_list.append(cur_bbox_info)
+
+bbox_data = {"prediction": bbox_info_list}
+dump_bbox_data = json.dumps(bbox_data)
+redis_client.set("infer:eo", dump_bbox_data)
