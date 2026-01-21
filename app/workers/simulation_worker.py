@@ -450,6 +450,17 @@ class SimulationWorker(QObject):
                     px, py = coords_to_pixel(own_state['lat_deg'], own_state['lon_deg'], mi)
                     current_positions[own_idx] = (px, py, own_state['heading_true_deg'], own_state['sog_knots'])
 
+                    # GPGGA 신호 생성 (Own Ship)
+                    # AIVDM/RATTM과 동일하게 선박 객체의 signals_enabled/signal_intervals 속성 사용
+                    if own_ship.signals_enabled.get('GPGGA', False):
+                        interval = own_ship.signal_intervals.get('GPGGA', 1.0)
+                        current_sim_time = (ts_val - self.proj.start_time).total_seconds()
+                        last_gp = self.last_emission_times.get((own_idx, 'GPGGA'), -float('inf'))
+                        if (current_sim_time + 1e-9) >= (last_gp + interval):
+                            gp_msg = self.gen_gpgga(own_state, ts_val)
+                            self.send_nmea(gp_msg, ts_val)
+                            self.last_emission_times[(own_idx, 'GPGGA')] = current_sim_time
+
                 # 타겟 선박 상태 업데이트
                 for tgt in self.active_ships:
                     if tgt.idx == own_idx:
@@ -1604,6 +1615,38 @@ class SimulationWorker(QObject):
         dt = base['rx_time']
         utc_time = dt.strftime("%H%M%S.%f")[:9]
         raw = f"$RATTM,{tgt_num:02d},1.5,45.0,T,{state['sog_knots']:.1f},{state['cog_true_deg']:.1f},T,0.5,10.0,N,b,T,,{utc_time},A"
+        return f"{raw}*{calculate_checksum(raw[1:])}"
+
+    def gen_gpgga(self, state, ts_obj):
+        """
+        GPGGA NMEA 메시지를 생성합니다. (Own Ship용)
+
+        매개변수:
+            state: 자선 상태 딕셔너리
+            ts_obj: 타임스탬프
+        """
+        lat = state['lat_deg']
+        lon = state['lon_deg']
+
+        # 위도 (ddmm.mmmm)
+        lat_abs = abs(lat)
+        lat_deg_int = int(lat_abs)
+        lat_min = (lat_abs - lat_deg_int) * 60.0
+        lat_str = f"{lat_deg_int:02d}{lat_min:07.4f}"
+        ns = 'N' if lat >= 0 else 'S'
+
+        # 경도 (dddmm.mmmm)
+        lon_abs = abs(lon)
+        lon_deg_int = int(lon_abs)
+        lon_min = (lon_abs - lon_deg_int) * 60.0
+        lon_str = f"{lon_deg_int:03d}{lon_min:07.4f}"
+        ew = 'E' if lon >= 0 else 'W'
+
+        utc_time = ts_obj.strftime("%H%M%S.%f")[:9]
+
+        # $GPGGA,time,lat,ns,lon,ew,qual,sats,hdop,alt,M,geoid,M,age,ref*cs
+        # Quality=1(GPS), Sats=12, HDOP=1.0, Alt=0.0, Geoid=0.0
+        raw = f"$GPGGA,{utc_time},{lat_str},{ns},{lon_str},{ew},1,12,1.0,0.0,M,0.0,M,,"
         return f"{raw}*{calculate_checksum(raw[1:])}"
 
     def gen_cam_signal(self, own_dyn, tgt_ship, tgt_dyn, dist_nm):

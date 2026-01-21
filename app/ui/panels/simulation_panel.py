@@ -1038,6 +1038,18 @@ class SimulationPanel(QWidget):
         self.chk_show_paths.toggled.connect(self.draw_static_map)
         top_layout.addWidget(self.chk_show_paths)
         
+        self.chk_send_gpgga = QCheckBox("Send GPGGA")
+        
+        # 자선(Own Ship)의 signals_enabled 상태와 연동
+        own_idx = current_project.settings.own_ship_idx
+        own_ship = current_project.get_ship_by_idx(own_idx)
+        if own_ship and 'GPGGA' not in own_ship.signals_enabled:
+            own_ship.signals_enabled['GPGGA'] = True  # 기본값 ON
+            
+        self.chk_send_gpgga.setChecked(own_ship.signals_enabled.get('GPGGA', True) if own_ship else False)
+        self.chk_send_gpgga.toggled.connect(self.on_gpgga_toggled)
+        top_layout.addWidget(self.chk_send_gpgga)
+
         self.btn_capture = QPushButton("Capture")
         self.btn_capture.clicked.connect(self.action_capture)
         self.btn_capture.setMinimumSize(self.btn_capture.sizeHint())
@@ -1204,6 +1216,12 @@ class SimulationPanel(QWidget):
         self.draw_static_map()
         self.update_follow_combo()
         self.update_control_combo()
+
+    def on_gpgga_toggled(self, checked):
+        own_idx = current_project.settings.own_ship_idx
+        own_ship = current_project.get_ship_by_idx(own_idx)
+        if own_ship:
+            own_ship.signals_enabled['GPGGA'] = checked
 
     def _tune_duration_widget(self):
         """Keep Duration inputs compact and aligned with other top controls."""
