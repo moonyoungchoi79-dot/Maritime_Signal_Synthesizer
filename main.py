@@ -22,7 +22,7 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setFont(QFont("Segoe UI", 10))
 
-    # 프로젝트 설정에서 테마 모드를 가져와 스타일 적용
+    # 프로젝트의 속성을 포함하는 json파일에서 테마 모드를 가져와 스타일 적용
     # 설정이 없으면 기본값 "System" 사용
     theme_mode = current_project.settings.theme_mode if hasattr(current_project.settings, 'theme_mode') else "System"
     apply_modern_style(app, theme_mode)
