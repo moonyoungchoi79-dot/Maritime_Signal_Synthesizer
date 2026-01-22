@@ -53,7 +53,7 @@ from app.workers.rtg_worker import RTGWorker
 from app.ui.map.sim_map_view import SimMapView
 from app.ui.dialogs.rtg_dialog import RTGDialog
 from app.ui.widgets.time_input_widget import TimeInputWidget
-from app.ui.widgets.panorama_view import PanoramaView, DualPanoramaView
+from app.ui.widgets.panorama_view import PanoramaView, CameraPanoramaDialog
 from app.core.camera_projection import DualCameraBboxGenerator
 from app.ui.widgets import message_box as msgbox
 import app.core.state as app_state
@@ -172,16 +172,6 @@ class TargetInfoDialog(QDialog):
         scroll_layout = QVBoxLayout(scroll_content)
         scroll_layout.setSpacing(8)
 
-        # Panorama view for camera detections (moved to top)
-        # 듀얼 카메라 (EO/IR) 파노라마 뷰
-        pano_group = QGroupBox("CAMERA Panorama View (EO: ±90° / IR: ±55°)")
-        pano_layout = QVBoxLayout(pano_group)
-        self.panorama_view = DualPanoramaView()
-        self.panorama_view.setMinimumHeight(200)
-        self.panorama_view.setMaximumHeight(300)
-        pano_layout.addWidget(self.panorama_view)
-        scroll_layout.addWidget(pano_group)
-
         # Basic Info Group
         basic_group = QGroupBox("Basic Information")
         basic_layout = QVBoxLayout(basic_group)
@@ -275,10 +265,6 @@ class TargetInfoDialog(QDialog):
         btn_box.addWidget(self.btn_close)
         layout.addLayout(btn_box)
 
-        # Cache DualCameraBboxGenerator for performance (expensive to create)
-        self._bbox_generator = None
-        self._bbox_generator_camera_height = None
-
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_info)
         self.timer.start(200)
@@ -315,9 +301,6 @@ class TargetInfoDialog(QDialog):
         elif self.parent().calculate_ship_state:
             calc_state = self.parent().calculate_ship_state(ship, t_now)
             state.update(calc_state)
-
-        # Calculate detections from THIS ship's perspective
-        self._update_panorama_detections()
 
         # === Basic Information ===
         # Determine role
@@ -575,119 +558,6 @@ class TargetInfoDialog(QDialog):
         """Wrap angle to [-180, 180] range."""
         return ((deg + 180) % 360) - 180
 
-    def _update_panorama_detections(self):
-        """Calculate camera detections from this ship's perspective using Homography-based projection.
-
-        Uses the DualCameraBboxGenerator to project ship 3D models onto EO/IR panorama views.
-        EO camera: ±90° FOV, IR camera: ±55° FOV.
-        Ships beyond camera d1 distance are filtered out.
-        """
-        from app.core.geometry import ecef_heading, ecef_distance
-
-        if not self.worker or not self.worker.running:
-            self.panorama_view.clear_detections()
-            return
-
-        # Get this ship's dynamic state (observer)
-        if self.ship_idx not in self.worker.dynamic_ships:
-            self.panorama_view.clear_detections()
-            return
-
-        observer_dyn = self.worker.dynamic_ships[self.ship_idx]
-        observer_hdg = observer_dyn['hdg']
-
-        # Get camera settings
-        settings = current_project.settings
-        camera_d1_nm = settings.camera_reception.d1
-        camera_d1_m = camera_d1_nm * 1852.0  # Convert NM to meters
-        camera_height = getattr(settings, 'camera_height_m', 15.0)
-
-        # Reuse cached bbox generator (only recreate if camera height changed)
-        if self._bbox_generator is None or self._bbox_generator_camera_height != camera_height:
-            self._bbox_generator = DualCameraBboxGenerator(camera_height_m=camera_height)
-            self._bbox_generator_camera_height = camera_height
-        bbox_generator = self._bbox_generator
-
-        eo_detections = []
-        ir_detections = []
-
-        # Loop through all other ships
-        for other_ship in current_project.ships:
-            if other_ship.idx == self.ship_idx:
-                continue  # Skip self
-
-            if other_ship.idx not in self.worker.dynamic_ships:
-                continue
-
-            other_dyn = self.worker.dynamic_ships[other_ship.idx]
-
-            # Calculate true bearing from observer to target
-            bearing_true = ecef_heading(
-                observer_dyn['x'], observer_dyn['y'], observer_dyn['z'],
-                other_dyn['x'], other_dyn['y'], other_dyn['z']
-            )
-
-            # Calculate relative bearing
-            rel_bearing = self._wrap_to_180(bearing_true - observer_hdg)
-
-            # Calculate distance
-            dist_m = ecef_distance(
-                observer_dyn['x'], observer_dyn['y'], observer_dyn['z'],
-                other_dyn['x'], other_dyn['y'], other_dyn['z']
-            )
-
-            # Skip if ship is beyond camera d1 distance
-            if dist_m >= camera_d1_m:
-                continue
-
-            # Ship dimensions
-            length_m = getattr(other_ship, 'length_m', 300.0)
-            beam_m = getattr(other_ship, 'beam_m', 40.0)
-            height_m = getattr(other_ship, 'height_m', 30.0)
-            ship_dims = (length_m, beam_m, height_m)
-            ship_class = getattr(other_ship, 'ship_class', 'CONTAINER')
-
-            # Calculate relative position in meters
-            rel_bearing_rad = math.radians(rel_bearing)
-            target_rel_x = dist_m * math.sin(rel_bearing_rad)  # right (starboard)
-            target_rel_y = dist_m * math.cos(rel_bearing_rad)  # front (bow)
-
-            # Target ship's relative heading
-            tgt_heading = other_dyn['hdg']
-            target_heading_rel = math.radians(tgt_heading - observer_hdg)
-
-            # EO camera bbox (±90° FOV)
-            if getattr(settings, 'eo_camera_enabled', True):
-                if -90.0 <= rel_bearing <= 90.0:
-                    eo_bbox = bbox_generator.generate_bbox(
-                        ship_dims, target_rel_x, target_rel_y, target_heading_rel, "EO"
-                    )
-                    if eo_bbox:
-                        eo_det = bbox_generator.generate_detection_dict(
-                            other_ship.idx, other_ship.name, ship_class,
-                            rel_bearing, eo_bbox, "EO"
-                        )
-                        eo_detections.append(eo_det)
-
-            # IR camera bbox (±55° FOV)
-            if getattr(settings, 'ir_camera_enabled', True):
-                if -55.0 <= rel_bearing <= 55.0:
-                    ir_bbox = bbox_generator.generate_bbox(
-                        ship_dims, target_rel_x, target_rel_y, target_heading_rel, "IR"
-                    )
-                    if ir_bbox:
-                        ir_det = bbox_generator.generate_detection_dict(
-                            other_ship.idx, other_ship.name, ship_class,
-                            rel_bearing, ir_bbox, "IR"
-                        )
-                        ir_detections.append(ir_det)
-
-        # Set detections with dual camera format
-        self.panorama_view.set_detections({
-            'eo': eo_detections,
-            'ir': ir_detections
-        })
-
     def change_speed(self):
         ship = current_project.get_ship_by_idx(self.ship_idx)
         if not ship: return
@@ -745,6 +615,123 @@ class ExtraTimeDialog(QDialog):
     def get_seconds(self):
         return self.time_input.get_seconds()
 
+
+class ShipCameraWindow(CameraPanoramaDialog):
+    """
+    특정 선박의 시점에서 본 카메라 뷰를 표시하는 독립 윈도우입니다.
+    """
+    def __init__(self, parent, ship_idx, worker):
+        super().__init__(parent)
+        self.ship_idx = ship_idx
+        self.worker = worker
+        ship = current_project.get_ship_by_idx(ship_idx)
+        ship_name = ship.name if ship else f"ID {ship_idx}"
+        self.setWindowTitle(f"Camera View - {ship_name}")
+        self.resize(1200, 500)
+        
+        # Bbox generator
+        self._bbox_generator = None
+        self._bbox_generator_camera_height = None
+        
+        # Timer for updates
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_view)
+        self.timer.start(100) # 10fps
+
+    def _wrap_to_180(self, deg):
+        return ((deg + 180) % 360) - 180
+
+    def update_view(self):
+        from app.core.geometry import ecef_heading, ecef_distance
+
+        if not self.worker or not self.worker.running:
+            self.update_detections([{'eo': [], 'ir': []}])
+            return
+
+        if self.ship_idx not in self.worker.dynamic_ships:
+            self.update_detections([{'eo': [], 'ir': []}])
+            return
+
+        observer_dyn = self.worker.dynamic_ships[self.ship_idx]
+        observer_hdg = observer_dyn['hdg']
+
+        settings = current_project.settings
+        camera_d1_nm = settings.camera_reception.d1
+        camera_d1_m = camera_d1_nm * 1852.0
+        camera_height = getattr(settings, 'camera_height_m', 15.0)
+
+        if self._bbox_generator is None or self._bbox_generator_camera_height != camera_height:
+            self._bbox_generator = DualCameraBboxGenerator(camera_height_m=camera_height)
+            self._bbox_generator_camera_height = camera_height
+        bbox_generator = self._bbox_generator
+
+        eo_detections = []
+        ir_detections = []
+
+        for other_ship in current_project.ships:
+            if other_ship.idx == self.ship_idx:
+                continue
+
+            if other_ship.idx not in self.worker.dynamic_ships:
+                continue
+
+            other_dyn = self.worker.dynamic_ships[other_ship.idx]
+
+            bearing_true = ecef_heading(
+                observer_dyn['x'], observer_dyn['y'], observer_dyn['z'],
+                other_dyn['x'], other_dyn['y'], other_dyn['z']
+            )
+
+            rel_bearing = self._wrap_to_180(bearing_true - observer_hdg)
+
+            dist_m = ecef_distance(
+                observer_dyn['x'], observer_dyn['y'], observer_dyn['z'],
+                other_dyn['x'], other_dyn['y'], other_dyn['z']
+            )
+
+            if dist_m >= camera_d1_m:
+                continue
+
+            length_m = getattr(other_ship, 'length_m', 300.0)
+            beam_m = getattr(other_ship, 'beam_m', 40.0)
+            height_m = getattr(other_ship, 'height_m', 30.0)
+            ship_dims = (length_m, beam_m, height_m)
+            ship_class = getattr(other_ship, 'ship_class', 'CONTAINER')
+
+            rel_bearing_rad = math.radians(rel_bearing)
+            target_rel_x = dist_m * math.sin(rel_bearing_rad)
+            target_rel_y = dist_m * math.cos(rel_bearing_rad)
+
+            tgt_heading = other_dyn['hdg']
+            target_heading_rel = math.radians(tgt_heading - observer_hdg)
+
+            if getattr(settings, 'eo_camera_enabled', True):
+                if -90.0 <= rel_bearing <= 90.0:
+                    eo_bbox = bbox_generator.generate_bbox(
+                        ship_dims, target_rel_x, target_rel_y, target_heading_rel, "EO"
+                    )
+                    if eo_bbox:
+                        eo_det = bbox_generator.generate_detection_dict(
+                            other_ship.idx, other_ship.name, ship_class,
+                            rel_bearing, eo_bbox, "EO"
+                        )
+                        eo_detections.append(eo_det)
+
+            if getattr(settings, 'ir_camera_enabled', True):
+                if -55.0 <= rel_bearing <= 55.0:
+                    ir_bbox = bbox_generator.generate_bbox(
+                        ship_dims, target_rel_x, target_rel_y, target_heading_rel, "IR"
+                    )
+                    if ir_bbox:
+                        ir_det = bbox_generator.generate_detection_dict(
+                            other_ship.idx, other_ship.name, ship_class,
+                            rel_bearing, ir_bbox, "IR"
+                        )
+                        ir_detections.append(ir_det)
+
+        self.update_detections([{'eo': eo_detections, 'ir': ir_detections}])
+
+
 class SimulationPanel(QWidget):
     """
     NMEA 신호 시뮬레이션을 제어하는 패널 클래스입니다.
@@ -797,6 +784,7 @@ class SimulationPanel(QWidget):
         self.sim_ended = False
         self.last_pos_dict = {}
         self.speed_history = {} 
+        self.ship_camera_window = None
         
         self._duration_spinbox = None
         self._ext_duration_le = None
@@ -1733,10 +1721,14 @@ class SimulationPanel(QWidget):
         self.combo_control_ship.currentIndexChanged.connect(self.on_control_ship_changed)
         layout.addWidget(self.combo_control_ship, 0, 1, 1, 2)
         
+        self.btn_view = QPushButton("View")
+        self.btn_view.clicked.connect(self.on_view_clicked)
+        layout.addWidget(self.btn_view, 0, 3)
+
         self.btn_info = QPushButton("Info")
         self.btn_info.clicked.connect(self.on_info_clicked)
-        layout.addWidget(self.btn_info, 0, 3)
-        
+        layout.addWidget(self.btn_info, 0, 4)
+
         layout.addWidget(QLabel("Speed (kn):"), 1, 0)
         self.spin_control_spd = QDoubleSpinBox()
         self.spin_control_spd.setRange(0, 10000) 
@@ -1744,7 +1736,7 @@ class SimulationPanel(QWidget):
         layout.addWidget(self.spin_control_spd, 1, 1)
         self.btn_set_spd = QPushButton("Set")
         self.btn_set_spd.clicked.connect(self.on_set_speed_clicked)
-        layout.addWidget(self.btn_set_spd, 1, 2)
+        layout.addWidget(self.btn_set_spd, 1, 2, 1, 3)
         
         layout.addWidget(QLabel("Heading (deg):"), 2, 0)
         self.spin_control_hdg = QDoubleSpinBox()
@@ -1754,13 +1746,13 @@ class SimulationPanel(QWidget):
         layout.addWidget(self.spin_control_hdg, 2, 1)
         self.btn_set_hdg = QPushButton("Set")
         self.btn_set_hdg.clicked.connect(self.on_set_heading_clicked)
-        layout.addWidget(self.btn_set_hdg, 2, 2)
+        layout.addWidget(self.btn_set_hdg, 2, 2, 1, 2)
 
         # 헤딩 고정 체크박스
         self.chk_fix_heading = QCheckBox("Fix")
         self.chk_fix_heading.setToolTip("Enable fixed heading mode (rhumb line instead of great circle)")
         self.chk_fix_heading.stateChanged.connect(self.on_fix_heading_changed)
-        layout.addWidget(self.chk_fix_heading, 2, 3)
+        layout.addWidget(self.chk_fix_heading, 2, 4)
 
         return group
 
@@ -1804,6 +1796,15 @@ class SimulationPanel(QWidget):
         idx = self.combo_control_ship.currentData()
         if idx is not None:
             self.open_target_info_dialog(idx)
+
+    def on_view_clicked(self):
+        idx = self.combo_control_ship.currentData()
+        if idx is None: return
+        
+        if self.ship_camera_window:
+            self.ship_camera_window.close()
+        self.ship_camera_window = ShipCameraWindow(self, idx, self.worker)
+        self.ship_camera_window.show()
 
     def on_control_ship_changed(self):
         idx = self.combo_control_ship.currentData()

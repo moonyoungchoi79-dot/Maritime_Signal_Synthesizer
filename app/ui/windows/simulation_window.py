@@ -53,6 +53,7 @@ from app.ui.map.sim_map_view import SimMapView
 from app.workers.simulation_worker import SimulationWorker
 from app.ui.dialogs.rtg_dialog import RTGDialog
 from app.ui.widgets.time_input_widget import TimeInputWidget
+from app.ui.widgets.panorama_view import CameraPanoramaDialog
 import app.core.state as app_state
 
 
@@ -98,6 +99,7 @@ class SimulationWindow(QWidget):
         self.is_paused = False          # 일시정지 상태
         self.data_ready_flag = False    # 내보내기 데이터 준비 플래그
         self.suppress_close_warning = False  # 닫기 경고 억제 플래그
+        self.camera_dialog = None       # 카메라 뷰 다이얼로그
 
     def set_follow_target(self, idx):
         """
@@ -236,6 +238,7 @@ class SimulationWindow(QWidget):
         # 레이아웃 비율 1:2
         grid.setColumnStretch(1, 1)
         grid.setColumnStretch(3, 2)
+        grid.setColumnStretch(4, 0)
 
         top_layout.addWidget(grp)
 
@@ -264,6 +267,11 @@ class SimulationWindow(QWidget):
         self.btn_clear_rtg = QPushButton("Clear Random Targets")
         self.btn_clear_rtg.clicked.connect(self.action_clear_random_targets)
         r_layout.addWidget(self.btn_clear_rtg)
+
+        # 카메라 뷰 버튼 (View)
+        self.btn_cam_view = QPushButton("View")
+        self.btn_cam_view.clicked.connect(self.action_open_camera_view)
+        grid.addWidget(self.btn_cam_view, 1, 4) # Controls 그룹 내 Follow 콤보박스 옆에 배치 시도
 
         # 시뮬레이션 제어 버튼
         btn_box = QHBoxLayout()
@@ -313,6 +321,15 @@ class SimulationWindow(QWidget):
 
         self.draw_static_map()
         self.update_follow_combo()
+
+    def action_open_camera_view(self):
+        """카메라 파노라마 뷰 다이얼로그를 엽니다."""
+        if self.camera_dialog is None:
+            self.camera_dialog = CameraPanoramaDialog(self)
+            # 워커가 이미 실행 중이면 연결
+            if self.worker:
+                self.worker.camera_detections_updated.connect(self.camera_dialog.update_detections)
+        self.camera_dialog.show()
 
     def on_duration_changed(self, val):
         """

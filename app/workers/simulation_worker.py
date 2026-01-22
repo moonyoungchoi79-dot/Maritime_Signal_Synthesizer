@@ -175,8 +175,7 @@ class SimulationWorker(QObject):
         self.ir_detections = []  # IR 카메라 탐지 데이터
 
         # 듀얼 카메라 bbox 생성기 초기화
-        camera_height = getattr(self.proj.settings, 'camera_height_m', 15.0)
-        self.bbox_generator = DualCameraBboxGenerator(camera_height_m=camera_height)
+        self.bbox_generator = DualCameraBboxGenerator(camera_height_m=15.0) # Will be updated in run()
 
         # Redis 전송기 초기화
         self.redis_transmitter = None
@@ -415,6 +414,12 @@ class SimulationWorker(QObject):
 
             own_idx = self.proj.settings.own_ship_idx
             own_ship = self.proj.get_ship_by_idx(own_idx)
+
+            # 카메라 높이 설정 (Deck Height + Mounting Height)
+            # height_m(가시 높이)을 Deck 높이의 근사값으로 사용 (또는 air_draft의 절반)
+            deck_height = getattr(own_ship, 'height_m', 10.0) if own_ship else 0.0
+            mount_height = getattr(self.proj.settings, 'camera_height_m', 15.0)
+            self.bbox_generator.update_camera_height(deck_height + mount_height)
 
             dT = self.proj.unit_time
             self.max_steps = math.ceil(self.duration_sec / dT)

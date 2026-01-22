@@ -409,6 +409,26 @@ class PanoramicFrameTransform:
         중심점이 FOV 안에 있으면 8개 꼭짓점 모두를 유효한 것으로 투영합니다.
         이를 통해 FOV 경계에서 연속적인 bbox 변화를 보장합니다.
 
+        [Updated] 호모그래피 행렬을 사용하되, 평면 투영(Z 나눗셈)을 우회하여
+        90도 부근의 특이점 문제를 해결하는 직접 변환 방식을 사용합니다.
+
+        매개변수:
+            rel_xs: 우현 방향 거리 배열 (미터)
+            rel_ys: 전방 방향 거리 배열 (미터)
+            rel_zs: 높이 배열 (미터, 위쪽이 음수)
+
+        반환값:
+            (cylinder_us, cylinder_vs) 원통 파노라마 좌표 배열
+        """
+        return self.convert_relXYZ_batch_2_cylinder_direct(rel_xs, rel_ys, rel_zs)
+
+    def convert_relXYZ_batch_2_cylinder_direct(self, rel_xs: np.ndarray, rel_ys: np.ndarray, rel_zs: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        상대 World 좌표를 원통 파노라마 좌표로 직접 변환합니다.
+        
+        호모그래피 행렬 연산 결과를 이용하여 Camera Frame 좌표를 복원하고,
+        이를 원통 투영 공식에 직접 대입합니다.
+
         매개변수:
             rel_xs: 우현 방향 거리 배열 (미터)
             rel_ys: 전방 방향 거리 배열 (미터)
@@ -425,46 +445,39 @@ class PanoramicFrameTransform:
         dim_U = self._pano_spec.dim_U
         dim_V = self._pano_spec.dim_V
 
-        # 동차좌표 변환 (벡터화) - Z 좌표 포함
-        weights = H[2, 0] * rel_ys + H[2, 1] * rel_xs + H[2, 2] * rel_zs + H[2, 3]
+        # 1. 호모그래피 변환 (World -> Homogeneous Image Coords)
+        # H 행렬은 [u*w, v*w, w]^T 를 생성합니다. (w = Zc)
+        # World: X=front(rel_ys), Y=right(rel_xs), Z=down(rel_zs)
+        
+        # p0 = u*w = fu*Xc + cu*Zc
+        p0 = H[0, 0] * rel_ys + H[0, 1] * rel_xs + H[0, 2] * rel_zs + H[0, 3]
+        # p1 = v*w = fv*Yc + cv*Zc
+        p1 = H[1, 0] * rel_ys + H[1, 1] * rel_xs + H[1, 2] * rel_zs + H[1, 3]
+        # p2 = w = Zc
+        p2 = H[2, 0] * rel_ys + H[2, 1] * rel_xs + H[2, 2] * rel_zs + H[2, 3]
 
-        # 유효성 마스크 (카메라 앞에 있는 점만)
-        valid = weights > self._eps
+        # 2. Camera Frame 좌표 (Xc, Yc, Zc) 복원
+        # 평면 투영(p0/p2)을 수행하지 않고, 역산하여 좌표를 복원합니다.
+        # 이를 통해 Zc가 0에 가까워질 때(90도) 발생하는 나눗셈 폭발을 방지합니다.
+        zc = p2
+        xc = (p0 - cu * zc) / fu
+        yc = (p1 - cv * zc) / fv
 
-        # 초기화 (무효 값)
-        cylinder_us = np.full_like(rel_xs, -99999.0)
-        cylinder_vs = np.full_like(rel_ys, -99999.0)
-
-        if not np.any(valid):
-            return cylinder_us, cylinder_vs
-
-        # 유효한 점만 계산 - Z 좌표 포함
-        inv_weights = 1.0 / weights[valid]
-        undist_us = inv_weights * (H[0, 0] * rel_ys[valid] + H[0, 1] * rel_xs[valid] + H[0, 2] * rel_zs[valid] + H[0, 3])
-        undist_vs = inv_weights * (H[1, 0] * rel_ys[valid] + H[1, 1] * rel_xs[valid] + H[1, 2] * rel_zs[valid] + H[1, 3])
-
-        # undist_v > 0 체크
-        valid2 = undist_vs > 0
-        if not np.any(valid2):
-            return cylinder_us, cylinder_vs
-
-        # 방위각 계산 (FOV 체크 없이)
-        thetas = np.arctan2(undist_us[valid2] - cu, fu)
-
-        # 원통 투영 (FOV 체크 없이 모든 점 계산)
+        # 3. 원통 좌표계 변환
+        # 수평 각도 (Azimuth) - atan2는 (0,0)이 아니면 모든 각도 처리 가능
+        thetas = np.arctan2(xc, zc)
+        
+        # 거리 (XZ 평면)
+        dists = np.sqrt(xc**2 + zc**2)
+        
+        # 수평 픽셀 좌표
         cylinder_focal = dim_U / self._fov_rad
+        cylinder_us = (cylinder_focal * thetas) + (dim_U / 2.0)
 
-        final_cylinder_us = (cylinder_focal * thetas) + (dim_U / 2.0)
-
-        # 수직 좌표 계산 (단순 비율 변환)
-        final_cylinder_vs = ((undist_vs[valid2] - cv) / fv) * (dim_V / 2.0) + (dim_V / 2.0)
-
-        # 결과를 원래 인덱스에 매핑
-        valid_indices = np.where(valid)[0]
-        valid2_indices = valid_indices[valid2]
-
-        cylinder_us[valid2_indices] = final_cylinder_us
-        cylinder_vs[valid2_indices] = final_cylinder_vs
+        # 수직 픽셀 좌표
+        # 기존 평면 투영 비율(dim_V/2)을 유지하면서 거리(dist) 기반으로 계산
+        # Yc / dists 가 정규화된 높이(tan(elevation))에 해당
+        cylinder_vs = (yc / (dists + 1e-9)) * (dim_V / 2.0) + (dim_V / 2.0)
 
         return cylinder_us, cylinder_vs
 

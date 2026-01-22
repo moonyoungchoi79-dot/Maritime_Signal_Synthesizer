@@ -21,9 +21,10 @@ EO 카메라 (-90°~+90°)와 IR 카메라 (-55°~+55°) 두 개의 파노라마
     IR_PANO_H_PX: IR 파노라마 이미지 높이 (512 픽셀)
 """
 
+import math
 import time
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTabWidget
-from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTabWidget, QDialog, QPushButton
+from PyQt6.QtCore import Qt, QPointF, QRectF
 from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QFont, QFontMetrics
 
 
@@ -42,7 +43,7 @@ IR_PANO_H_PX = 512   # IR 파노라마 이미지 높이
 IR_FOV_DEG = 110.0   # IR 수평 FOV (±55°)
 
 
-class PanoramaView(QWidget):
+class ZoomablePanoramaView(QWidget):
     """
     카메라 탐지를 표시하는 파노라마 뷰 위젯입니다.
 
@@ -63,7 +64,7 @@ class PanoramaView(QWidget):
         _scale_color: 눈금 색상
     """
 
-    def __init__(self, parent=None, camera_type="legacy"):
+    def __init__(self, parent=None, camera_type="legacy", img_w=PANO_W_PX, img_h=PANO_H_PX, fov_deg=180.0):
         """
         PanoramaView를 초기화합니다.
 
@@ -72,29 +73,24 @@ class PanoramaView(QWidget):
             camera_type: 카메라 유형 ("legacy", "EO", "IR")
         """
         super().__init__(parent)
-        self.detections = []  # 탐지 데이터 목록
         self.camera_type = camera_type
+        self._pano_w = img_w
+        self._pano_h = img_h
+        self._fov_deg = fov_deg
+        self._half_fov = fov_deg / 2.0
+
+        self.detections = []  # 탐지 데이터 목록
         self.setMinimumHeight(80)  # 최소 높이
         self.setMinimumWidth(300)   # 최소 너비
         self._last_update = 0       # 마지막 업데이트 시간
         self._debounce_ms = 50      # 디바운스 간격 (사양 C-3: 30-100ms)
 
-        # 카메라 유형에 따른 파노라마 크기 및 FOV 설정
-        if camera_type == "EO":
-            self._pano_w = EO_PANO_W_PX
-            self._pano_h = EO_PANO_H_PX
-            self._fov_deg = EO_FOV_DEG
-            self._half_fov = 90.0
-        elif camera_type == "IR":
-            self._pano_w = IR_PANO_W_PX
-            self._pano_h = IR_PANO_H_PX
-            self._fov_deg = IR_FOV_DEG
-            self._half_fov = 55.0
-        else:  # legacy
-            self._pano_w = PANO_W_PX
-            self._pano_h = PANO_H_PX
-            self._fov_deg = 180.0
-            self._half_fov = 90.0
+        # Zoom & Pan state
+        self.scale_factor = 1.0
+        self.offset = QPointF(0, 0)
+        self.is_dragging = False
+        self.last_mouse_pos = QPointF()
+        self.setMouseTracking(True)
 
         # 색상 설정
         self._bg_color = QColor(30, 30, 40)        # 배경색
@@ -137,6 +133,65 @@ class PanoramaView(QWidget):
         self.detections = []
         self.update()
 
+    def wheelEvent(self, event):
+        """줌 인/아웃 처리"""
+        zoom_in = event.angleDelta().y() > 0
+        factor = 1.1 if zoom_in else 0.9
+        new_scale = self.scale_factor * factor
+        
+        # Limit zoom
+        if new_scale < 1.0: new_scale = 1.0
+        if new_scale > 20.0: new_scale = 20.0
+        
+        # Calculate offsets for aspect ratio preservation
+        w = self.width()
+        h = self.height()
+        target_ratio = self._pano_w / self._pano_h
+        view_ratio = w / h
+
+        if view_ratio > target_ratio:
+            draw_h = h
+            draw_w = h * target_ratio
+            x_off = (w - draw_w) / 2
+            y_off = 0
+        else:
+            draw_w = w
+            draw_h = w / target_ratio
+            x_off = 0
+            y_off = (h - draw_h) / 2
+
+        # Mouse centered zoom
+        mouse_pos = event.position()
+        
+        # Adjust mouse pos to be relative to the image origin
+        rel_mouse_x = mouse_pos.x() - x_off
+        rel_mouse_y = mouse_pos.y() - y_off
+        
+        world_x = (rel_mouse_x - self.offset.x()) / self.scale_factor
+        world_y = (rel_mouse_y - self.offset.y()) / self.scale_factor
+        
+        self.scale_factor = new_scale
+        self.offset.setX(rel_mouse_x - world_x * self.scale_factor)
+        self.offset.setY(rel_mouse_y - world_y * self.scale_factor)
+        
+        self.update()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.is_dragging = True
+            self.last_mouse_pos = event.position()
+
+    def mouseMoveEvent(self, event):
+        if self.is_dragging:
+            delta = event.position() - self.last_mouse_pos
+            self.last_mouse_pos = event.position()
+            self.offset += delta
+            self.update()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.is_dragging = False
+
     def paintEvent(self, event):
         """
         파노라마 뷰를 그리는 페인트 이벤트 핸들러입니다.
@@ -152,26 +207,60 @@ class PanoramaView(QWidget):
         w = self.width()
         h = self.height()
 
-        # 배경 그리기
-        painter.fillRect(0, 0, w, h, self._bg_color)
+        # Calculate drawing area preserving aspect ratio
+        target_ratio = self._pano_w / self._pano_h
+        view_ratio = w / h
+
+        if view_ratio > target_ratio:
+            draw_h = h
+            draw_w = h * target_ratio
+            x_off = (w - draw_w) / 2
+            y_off = 0
+        else:
+            draw_w = w
+            draw_h = w / target_ratio
+            x_off = 0
+            y_off = (h - draw_h) / 2
+
+        # Fill black background for letterboxing
+        painter.fillRect(0, 0, w, h, Qt.GlobalColor.black)
+
+        # Clip to drawing area
+        painter.setClipRect(int(x_off), int(y_off), int(draw_w), int(draw_h))
+
+        # Apply transform
+        painter.translate(x_off, y_off)
+        painter.translate(self.offset)
+        painter.scale(self.scale_factor, self.scale_factor)
+
+        # 배경 그리기 (이미지 영역)
+        painter.fillRect(QRectF(0, 0, draw_w, draw_h), self._bg_color)
 
         # 스케일 팩터 계산
-        scale_x = w / self._pano_w
-        scale_y = h / self._pano_h
+        scale_x = draw_w / self._pano_w
+        scale_y = draw_h / self._pano_h
 
         # 상단에 방위각 눈금 그리기
-        self._draw_scale(painter, w, h)
+        self._draw_scale(painter, draw_w, draw_h)
 
         # cy 비율 위치에 수평선 그리기
-        horizon_y = int(0.50 * h)  # 중앙에 수평선
-        painter.setPen(QPen(self._grid_color, 1, Qt.PenStyle.DashLine))
-        painter.drawLine(0, horizon_y, w, horizon_y)
+        horizon_y = int(0.50 * draw_h)  # 중앙에 수평선
+        # Scale invariant pen width
+        pen_grid = QPen(self._grid_color, 1 / self.scale_factor, Qt.PenStyle.DashLine)
+        painter.setPen(pen_grid)
+        painter.drawLine(QPointF(0, horizon_y), QPointF(draw_w, horizon_y))
 
         # 각 탐지에 대해 바운딩 박스 그리기
         for det in self.detections:
-            self._draw_detection(painter, det, scale_x, scale_y, w, h)
+            self._draw_detection(painter, det, scale_x, scale_y, draw_w, draw_h)
+
+        self.paintContent(painter, draw_w, draw_h, scale_x, scale_y)
 
         painter.end()
+
+    def paintContent(self, painter, w, h, scale_x, scale_y):
+        """Subclasses can override to draw extra content"""
+        pass
 
     def _draw_scale(self, painter, w, h):
         """
@@ -184,38 +273,59 @@ class PanoramaView(QWidget):
             w: 뷰 너비
             h: 뷰 높이
         """
-        painter.setPen(QPen(self._scale_color, 1))
+        pen = QPen(self._scale_color, 1 / self.scale_factor)
+        painter.setPen(pen)
         font = QFont()
-        font.setPointSize(8)
+        font.setPointSizeF(8 / self.scale_factor if self.scale_factor < 1 else 8) # Adjust font size visually? No, keep it readable.
+        # Actually for zoomable view, we usually want fixed screen size text.
+        # But here we are inside scaled painter.
+        # Let's invert scale for text drawing.
+        font_scale = 1.0 / self.scale_factor
+        font.setPointSizeF(10 * font_scale)
         painter.setFont(font)
 
-        # 카메라 유형에 따른 눈금 범위
+        # Dynamic grid step based on zoom
         if self.camera_type == "IR":
-            bearings = [-55, -40, -20, 0, 20, 40, 55]
+            step = 5  # Fixed step for IR
         else:
-            bearings = [-90, -60, -30, 0, 30, 60, 90]
+            step = 30
+            if self.scale_factor > 2.0: step = 10
+            if self.scale_factor > 5.0: step = 5
+            if self.scale_factor > 10.0: step = 1
 
-        for bearing in bearings:
+        start_deg = int(-self._half_fov)
+        end_deg = int(self._half_fov)
+        
+        for bearing in range(start_deg, end_deg + 1, step):
             # 방위각을 x 좌표로 변환
             x_norm = (bearing + self._half_fov) / self._fov_deg
             x = int(x_norm * w)
 
             # 눈금선 그리기
-            painter.drawLine(x, 0, x, 10)
+            painter.drawLine(QPointF(x, 0), QPointF(x, h)) # Full vertical grid lines
 
             # 라벨 그리기
             label = f"{bearing}°"
             fm = QFontMetrics(font)
-            label_w = fm.horizontalAdvance(label)
+            label_w = fm.horizontalAdvance(label) * font_scale # approx
             label_x = x - label_w // 2
             # 가시 영역 내로 클램핑
-            label_x = max(2, min(w - label_w - 2, label_x))
-            painter.drawText(label_x, 22, label)
+            # label_x = max(2, min(w - label_w - 2, label_x))
+            painter.drawText(QPointF(label_x, 22 * font_scale), label)
 
         # 중심선 (0°) 그리기
         center_x = w // 2
-        painter.setPen(QPen(self._grid_color, 1, Qt.PenStyle.DashLine))
-        painter.drawLine(center_x, 25, center_x, h)
+        painter.setPen(QPen(self._grid_color, 2 / self.scale_factor, Qt.PenStyle.SolidLine))
+        painter.drawLine(QPointF(center_x, 25), QPointF(center_x, h))
+
+    def _draw_boundary(self, painter, w, h, color, style):
+        """뷰 경계선을 그립니다."""
+        pen_width = 3.0
+        pen = QPen(color, pen_width / self.scale_factor, style)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        inset = (pen_width / 2.0) / self.scale_factor
+        painter.drawRect(QRectF(inset, inset, w - 2*inset, h - 2*inset))
 
     def _draw_detection(self, painter, det, scale_x, scale_y, view_w, view_h):
         """
@@ -239,7 +349,7 @@ class PanoramaView(QWidget):
         y1 = cy - h / 2
 
         # 채워진 사각형 그리기 (EO: 실선, IR: 점선)
-        pen = QPen(self._bbox_color, 2, self._bbox_pen_style)
+        pen = QPen(self._bbox_color, 2 / self.scale_factor, self._bbox_pen_style)
         painter.setPen(pen)
         painter.setBrush(QBrush(self._bbox_fill))
         painter.drawRect(int(x1), int(y1), int(w), int(h))
@@ -247,7 +357,7 @@ class PanoramaView(QWidget):
         # 박스 위에 라벨 그리기
         painter.setPen(self._text_color)
         font = QFont()
-        font.setPointSize(9)
+        font.setPointSizeF(9 / self.scale_factor)
         font.setBold(True)
         painter.setFont(font)
 
@@ -257,17 +367,46 @@ class PanoramaView(QWidget):
 
         fm = QFontMetrics(font)
         label_w = fm.horizontalAdvance(label)
-        label_x = int(cx - label_w / 2)
-        label_y = int(y1 - 5)
+        label_x = cx - label_w / 2
+        label_y = y1 - 5 / self.scale_factor
 
-        # 라벨을 가시 영역 내로 클램핑
-        label_x = max(2, min(view_w - label_w - 2, label_x))
-        label_y = max(30, label_y)
+        painter.drawText(QPointF(label_x, label_y), label)
 
-        painter.drawText(label_x, label_y, label)
+        # Side Labels
+        small_font = QFont()
+        small_font.setPointSizeF(8 / self.scale_factor)
+        small_font.setBold(True)
+        painter.setFont(small_font)
+        sfm = QFontMetrics(small_font)
+
+        if self.camera_type == "EO":
+            painter.setPen(self._bbox_color)
+            txt = "EO"
+            tw = sfm.horizontalAdvance(txt)
+            painter.drawText(QPointF(x1 - tw - 5/self.scale_factor, y1 + h/2 + sfm.ascent()/2), txt)
+        elif self.camera_type == "IR":
+            painter.setPen(self._bbox_color)
+            txt = "IR"
+            painter.drawText(QPointF(x1 + w + 5/self.scale_factor, y1 + h/2 + sfm.ascent()/2), txt)
 
 
-class CombinedPanoramaView(QWidget):
+
+class PanoramaView(ZoomablePanoramaView):
+    """Wrapper for backward compatibility or specific single view usage"""
+    def __init__(self, parent=None, camera_type="legacy"):
+        if camera_type == "EO":
+            super().__init__(parent, camera_type, EO_PANO_W_PX, EO_PANO_H_PX, EO_FOV_DEG)
+        elif camera_type == "IR":
+            super().__init__(parent, camera_type, IR_PANO_W_PX, IR_PANO_H_PX, IR_FOV_DEG)
+        else:
+            super().__init__(parent, camera_type, PANO_W_PX, PANO_H_PX, 180.0)
+
+    def paintContent(self, painter, w, h, scale_x, scale_y):
+        style = Qt.PenStyle.SolidLine if self.camera_type == "EO" else Qt.PenStyle.DotLine
+        self._draw_boundary(painter, w, h, self._bbox_color, style)
+
+
+class CombinedPanoramaView(ZoomablePanoramaView):
     """
     EO/IR 통합 파노라마 뷰 위젯입니다.
 
@@ -283,19 +422,11 @@ class CombinedPanoramaView(QWidget):
         매개변수:
             parent: 부모 위젯
         """
-        super().__init__(parent)
+        # Initialize as EO view base
+        super().__init__(parent, "EO", EO_PANO_W_PX, EO_PANO_H_PX, EO_FOV_DEG)
+        
         self.eo_detections = []  # EO 카메라 탐지 데이터
         self.ir_detections = []  # IR 카메라 탐지 데이터
-        self.setMinimumHeight(100)
-        self.setMinimumWidth(400)
-        self._last_update = 0
-        self._debounce_ms = 50
-
-        # EO 기준 파노라마 설정
-        self._pano_w = EO_PANO_W_PX
-        self._pano_h = EO_PANO_H_PX
-        self._fov_deg = EO_FOV_DEG
-        self._half_fov = 90.0
 
         # 색상 설정
         self._bg_color = QColor(30, 30, 40)
@@ -313,6 +444,14 @@ class CombinedPanoramaView(QWidget):
 
         # IR 범위 표시 색상
         self._ir_range_color = QColor(255, 100, 100, 30)
+
+        # Calculate IR vertical bounds relative to EO
+        # EO: 3840x1080, IR: 1536x512
+        eo_f = 3840 / math.pi
+        eo_vfov = 2 * math.atan(1080 / (2 * eo_f))
+        ir_f = 1536 / (math.radians(110))
+        ir_vfov = 2 * math.atan(512 / (2 * ir_f))
+        self.ir_v_ratio = ir_vfov / eo_vfov # approx 0.74
 
     def set_detections(self, detections_dict):
         """
@@ -349,31 +488,12 @@ class CombinedPanoramaView(QWidget):
         self.ir_detections = []
         self.update()
 
-    def paintEvent(self, event):
-        """파노라마 뷰를 그립니다."""
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        w = self.width()
-        h = self.height()
-
-        # 배경 그리기
-        painter.fillRect(0, 0, w, h, self._bg_color)
+    def paintContent(self, painter, w, h, scale_x, scale_y):
+        # EO 범위 영역 표시 (±90°) (Green Solid)
+        self._draw_boundary(painter, w, h, self._eo_bbox_color, Qt.PenStyle.SolidLine)
 
         # IR 범위 영역 표시 (±55°)
         self._draw_ir_range(painter, w, h)
-
-        # 스케일 팩터 계산 (EO 기준)
-        scale_x = w / self._pano_w
-        scale_y = h / self._pano_h
-
-        # 상단에 방위각 눈금 그리기
-        self._draw_scale(painter, w, h)
-
-        # 수평선 그리기
-        horizon_y = int(0.50 * h)
-        painter.setPen(QPen(self._grid_color, 1, Qt.PenStyle.DashLine))
-        painter.drawLine(0, horizon_y, w, horizon_y)
 
         # EO bbox 그리기 (녹색 실선)
         for det in self.eo_detections:
@@ -385,8 +505,6 @@ class CombinedPanoramaView(QWidget):
         for det in self.ir_detections:
             self._draw_ir_detection_on_eo(painter, det, w, h)
 
-        painter.end()
-
     def _draw_ir_range(self, painter, w, h):
         """IR 카메라 범위(±55°) 경계선만 표시합니다."""
         # IR 범위의 시작/끝 x 좌표 계산 (EO 좌표계 기준)
@@ -395,45 +513,22 @@ class CombinedPanoramaView(QWidget):
         ir_left_x = int(ir_left_norm * w)
         ir_right_x = int(ir_right_norm * w)
 
+        # IR Vertical bounds
+        # Center is h/2. Height is h * ratio.
+        ir_h = h * self.ir_v_ratio
+        ir_top_y = (h - ir_h) / 2
+        ir_bottom_y = (h + ir_h) / 2
+
         # IR 범위 경계선만 표시 (점선, 배경 색칠 없음)
-        painter.setPen(QPen(self._ir_bbox_color, 1, Qt.PenStyle.DotLine))
-        painter.drawLine(ir_left_x, 25, ir_left_x, h)
-        painter.drawLine(ir_right_x, 25, ir_right_x, h)
-
-    def _draw_scale(self, painter, w, h):
-        """뷰 상단에 방위각 눈금을 그립니다."""
-        painter.setPen(QPen(self._scale_color, 1))
-        font = QFont()
-        font.setPointSize(8)
-        painter.setFont(font)
-
-        # EO 범위 눈금 (±90°)
-        bearings = [-90, -55, -30, 0, 30, 55, 90]
-
-        for bearing in bearings:
-            x_norm = (bearing + self._half_fov) / self._fov_deg
-            x = int(x_norm * w)
-
-            painter.drawLine(x, 0, x, 10)
-
-            label = f"{bearing}°"
-            fm = QFontMetrics(font)
-            label_w = fm.horizontalAdvance(label)
-            label_x = x - label_w // 2
-            label_x = max(2, min(w - label_w - 2, label_x))
-
-            # ±55° 표시는 IR 색상으로
-            if bearing in [-55, 55]:
-                painter.setPen(QPen(self._ir_bbox_color, 1))
-                painter.drawText(label_x, 22, label)
-                painter.setPen(QPen(self._scale_color, 1))
-            else:
-                painter.drawText(label_x, 22, label)
-
-        # 중심선 (0°)
-        center_x = w // 2
-        painter.setPen(QPen(self._grid_color, 1, Qt.PenStyle.DashLine))
-        painter.drawLine(center_x, 25, center_x, h)
+        pen = QPen(self._ir_bbox_color, 2 / self.scale_factor, Qt.PenStyle.DotLine)
+        painter.setPen(pen)
+        
+        # Vertical lines (Restricted to IR vertical bounds)
+        painter.drawLine(QPointF(ir_left_x, ir_top_y), QPointF(ir_left_x, ir_bottom_y))
+        painter.drawLine(QPointF(ir_right_x, ir_top_y), QPointF(ir_right_x, ir_bottom_y))
+        # Horizontal lines (Top/Bottom bounds)
+        painter.drawLine(QPointF(ir_left_x, ir_top_y), QPointF(ir_right_x, ir_top_y))
+        painter.drawLine(QPointF(ir_left_x, ir_bottom_y), QPointF(ir_right_x, ir_bottom_y))
 
     def _draw_detection(self, painter, det, scale_x, scale_y, view_w, view_h,
                         bbox_color, bbox_fill, pen_style, camera_label):
@@ -446,7 +541,7 @@ class CombinedPanoramaView(QWidget):
         x1 = cx - bw / 2
         y1 = cy - bh / 2
 
-        pen = QPen(bbox_color, 2, pen_style)
+        pen = QPen(bbox_color, 2 / self.scale_factor, pen_style)
         painter.setPen(pen)
         painter.setBrush(QBrush(bbox_fill))
         painter.drawRect(int(x1), int(y1), int(bw), int(bh))
@@ -454,7 +549,7 @@ class CombinedPanoramaView(QWidget):
         # 라벨 그리기 (상단 중앙)
         painter.setPen(self._text_color)
         font = QFont()
-        font.setPointSize(9)
+        font.setPointSizeF(9 / self.scale_factor)
         font.setBold(True)
         painter.setFont(font)
 
@@ -464,21 +559,20 @@ class CombinedPanoramaView(QWidget):
 
         fm = QFontMetrics(font)
         label_w = fm.horizontalAdvance(label)
-        label_x = int(cx - label_w / 2)
-        label_y = int(y1 - 5)
+        label_x = cx - label_w / 2
+        label_y = y1 - 5 / self.scale_factor
 
-        label_x = max(2, min(view_w - label_w - 2, label_x))
-        label_y = max(30, label_y)
-
-        painter.drawText(label_x, label_y, label)
+        painter.drawText(QPointF(label_x, label_y), label)
 
         # 카메라 타입 라벨 (bbox 왼쪽에 표시)
         painter.setPen(bbox_color)
         small_font = QFont()
-        small_font.setPointSize(8)
+        small_font.setPointSizeF(8 / self.scale_factor)
         small_font.setBold(True)
         painter.setFont(small_font)
-        painter.drawText(int(x1 - 20), int(y1 + bh / 2 + 4), camera_label)
+        sfm = QFontMetrics(small_font)
+        tw = sfm.horizontalAdvance(camera_label)
+        painter.drawText(QPointF(x1 - tw - 5/self.scale_factor, y1 + bh / 2 + sfm.ascent()/2), camera_label)
 
     def _draw_ir_detection_on_eo(self, painter, det, view_w, view_h):
         """IR 탐지를 EO 좌표계로 변환하여 그립니다."""
@@ -503,16 +597,17 @@ class CombinedPanoramaView(QWidget):
         x2 = eo_right_norm * view_w
         bw = x2 - x1
 
-        # 수직 좌표는 비율로 변환 (IR과 EO의 종횡비가 다르므로)
-        ir_top_ratio = ir_top / IR_PANO_H_PX
-        ir_bottom_ratio = ir_bottom / IR_PANO_H_PX
+        # Vertical bounds of IR within EO view
+        ir_h_screen = view_h * self.ir_v_ratio
+        ir_top_y_screen = (view_h - ir_h_screen) / 2
 
-        y1 = ir_top_ratio * view_h
-        y2 = ir_bottom_ratio * view_h
+        # Map IR y coordinates to screen y
+        y1 = ir_top_y_screen + (ir_top / IR_PANO_H_PX) * ir_h_screen
+        y2 = ir_top_y_screen + (ir_bottom / IR_PANO_H_PX) * ir_h_screen
         bh = y2 - y1
 
         # IR bbox 그리기 (빨간색 점선, 일정한 간격)
-        pen = QPen(self._ir_bbox_color, 2, Qt.PenStyle.CustomDashLine)
+        pen = QPen(self._ir_bbox_color, 2 / self.scale_factor, Qt.PenStyle.CustomDashLine)
         pen.setDashPattern([4, 4])  # 4픽셀 점, 4픽셀 빈공간 (일정 간격)
         painter.setPen(pen)
         painter.setBrush(QBrush(self._ir_bbox_fill))
@@ -521,17 +616,18 @@ class CombinedPanoramaView(QWidget):
         # IR 라벨 (bbox 오른쪽에 표시)
         painter.setPen(self._ir_bbox_color)
         small_font = QFont()
-        small_font.setPointSize(8)
+        small_font.setPointSizeF(8 / self.scale_factor)
         small_font.setBold(True)
         painter.setFont(small_font)
-        painter.drawText(int(x2 + 3), int((y1 + y2) / 2 + 4), "IR")
+        sfm = QFontMetrics(small_font)
+        painter.drawText(QPointF(x2 + 5/self.scale_factor, (y1 + y2) / 2 + sfm.ascent()/2), "IR")
 
 
 class DualPanoramaView(QWidget):
     """
     EO/IR 듀얼 카메라 파노라마 뷰 위젯입니다.
 
-    CombinedPanoramaView를 사용하여 EO/IR을 하나의 뷰에 함께 표시합니다.
+    (Legacy Wrapper) CombinedPanoramaView를 사용하여 EO/IR을 하나의 뷰에 함께 표시합니다.
     """
 
     def __init__(self, parent=None):
@@ -585,3 +681,44 @@ class DualPanoramaView(QWidget):
     def get_ir_view(self):
         """IR 카메라 뷰를 반환합니다 (하위 호환)."""
         return self._combined_view
+
+
+class CameraPanoramaDialog(QDialog):
+    """
+    3개의 탭(Combined, EO, IR)을 가진 대형 파노라마 뷰 다이얼로그입니다.
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Camera Panorama View")
+        self.resize(1200, 400)
+
+        layout = QVBoxLayout(self)
+        
+        self.tabs = QTabWidget()
+        
+        # Tab 1: Combined
+        self.combined_view = CombinedPanoramaView()
+        self.tabs.addTab(self.combined_view, "Combined (EO+IR)")
+        
+        # Tab 2: EO Only
+        self.eo_view = PanoramaView(camera_type="EO")
+        self.tabs.addTab(self.eo_view, "EO Camera")
+        
+        # Tab 3: IR Only
+        self.ir_view = PanoramaView(camera_type="IR")
+        self.tabs.addTab(self.ir_view, "IR Camera")
+        
+        layout.addWidget(self.tabs)
+        
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(self.close)
+        layout.addWidget(btn_close)
+
+    def update_detections(self, detections_list):
+        """Update all views with new detections"""
+        if not detections_list: return
+        data = detections_list[0] # dict with 'eo', 'ir'
+        
+        self.combined_view.set_detections(data)
+        self.eo_view.set_detections(data.get('eo', []))
+        self.ir_view.set_detections(data.get('ir', []))

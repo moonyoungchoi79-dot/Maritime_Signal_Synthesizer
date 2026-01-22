@@ -814,8 +814,8 @@ class SettingsDialog(QDialog):
         self.spin_camera_height.setDecimals(1)
         self.spin_camera_height.setSuffix(" m")
         self.spin_camera_height.setValue(getattr(current_project.settings, 'camera_height_m', 15.0))
-        height_label = QLabel("Camera Height (above sea level):")
-        height_label.setToolTip("Height of the camera mounted on Own Ship, measured from sea level.")
+        height_label = QLabel("Camera Height (above deck):")
+        height_label.setToolTip("Height of the camera mounted on Own Ship's deck.")
         camera_layout.addRow(height_label, self.spin_camera_height)
 
         # EO 카메라 활성화
