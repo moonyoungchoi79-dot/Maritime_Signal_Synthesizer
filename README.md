@@ -73,7 +73,7 @@
 
 ## Program Structure
 
-이 프로젝트는 **Model-View-Controller** 패턴으로 설계되어 있습니다.
+이 프로그램은 **Model-View-Controller** 패턴으로 설계되어 있습니다.
 
 ### Root Directory
 - **`main.py`**: 프로그램의 진입점입니다. `QApplication`을 생성하고 테마를 적용한 뒤 `MainWindow`를 실행합니다.
