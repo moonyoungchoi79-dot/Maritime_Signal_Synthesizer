@@ -10,7 +10,7 @@ from typing import List, Optional, Sequence, Tuple
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
-from app.core.models.ship import ShipData, get_ship_dimensions
+from app.models.ship import ShipData, get_ship_dimensions
 from app.core.geometry import coords_to_pixel
 
 

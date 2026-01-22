@@ -15,8 +15,8 @@ from PyQt6.QtWidgets import (
     QGroupBox, QCheckBox, QPushButton, QListWidget, QListWidgetItem
 )
 from PyQt6.QtCore import Qt
-from app.core.models.event import SimEvent, EventCondition
-from app.core.models.project import current_project
+from app.models.event import SimEvent, EventCondition
+from app.models.project import current_project
 from app.ui.widgets import message_box as msgbox
 
 

@@ -54,10 +54,10 @@ from PyQt6.QtGui import (
     QCursor, QAction
 )
 from app.core.constants import APP_NAME, DEFAULT_WINDOW_SIZE, CSV_HEADER
-from app.core.models.project import current_project
-from app.core.models.ship import ShipData
-from app.core.models.area import Area
-from app.core.models.event import EventTrigger
+from app.models.project import current_project
+from app.models.ship import ShipData
+from app.models.area import Area
+from app.models.event import EventTrigger
 from app.core.utils import sanitize_filename
 from app.core.geometry import coords_to_pixel, pixel_to_coords, resample_polyline_numpy, resample_polygon_equidistant, normalize_lon, great_circle_path_pixels, calculate_bearing
 from app.ui.map.map_view import MapView
@@ -100,7 +100,7 @@ class AddShipDialog(QDialog):
             default_name: 기본 선박 이름
         """
         super().__init__(parent)
-        from app.core.models.ship import SHIP_CLASS_DIMENSIONS
+        from app.models.ship import SHIP_CLASS_DIMENSIONS
 
         self.ship_dimensions = SHIP_CLASS_DIMENSIONS
         self.setWindowTitle("Add Ship")
@@ -1766,7 +1766,7 @@ class MainWindow(QMainWindow):
                 for fname in os.listdir(scen_dir):
                     if fname.endswith(".scenario.json") or fname.endswith(".json"):
                         try:
-                            from app.core.models.scenario import Scenario
+                            from app.models.scenario import Scenario
                             scen = Scenario.load_from_file(os.path.join(scen_dir, fname))
                             app_state.loaded_scenarios.append(scen)
 

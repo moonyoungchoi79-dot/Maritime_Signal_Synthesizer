@@ -35,8 +35,8 @@ except ImportError:
 import math
 import numpy as np
 
-from app.core.models.project import current_project
-from app.core.models.settings import RECEPTION_PRESETS, ReceptionModelConfig
+from app.models.project import current_project
+from app.models.settings import RECEPTION_PRESETS, ReceptionModelConfig
 
 
 class SettingsDialog(QDialog):

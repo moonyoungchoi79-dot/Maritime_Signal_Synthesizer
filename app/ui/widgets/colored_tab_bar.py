@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QPainter
-from app.core.models.project import current_project
+from app.models.project import current_project
 
 
 class ColoredTabBar(QTabBar):

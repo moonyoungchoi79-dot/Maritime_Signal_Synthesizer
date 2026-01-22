@@ -22,7 +22,7 @@ from PyQt6.QtCore import (
 from PyQt6.QtGui import (
     QBrush
 )
-from app.core.models.project import current_project, EventTrigger
+from app.models.project import current_project, EventTrigger
 from app.ui.widgets.time_input_widget import TimeInputWidget
 from app.ui.panels.scenario_panel import ScenarioPanel
 

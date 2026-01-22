@@ -13,9 +13,9 @@ PyQt6 기반의 GUI 애플리케이션을 초기화하고 실행합니다.
 import sys
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QFont
-from app.ui.windows.main_window import MainWindow
+from app.ui.main_window import MainWindow
 from app.ui.styles import apply_modern_style
-from app.core.models.project import current_project
+from app.models.project import current_project
 
 if __name__ == "__main__":
     # PyQt6 애플리케이션 인스턴스 생성

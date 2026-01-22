@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import QWidget
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QPen, QFont, QPainter
 
-from app.core.models.project import current_project
+from app.models.project import current_project
 from app.core.geometry import get_optimal_grid_step, normalize_lon
 
 

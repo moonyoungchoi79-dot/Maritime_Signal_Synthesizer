@@ -28,9 +28,9 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor
 
-from app.core.models.project import current_project, EventTrigger
-from app.core.models.event import EventCondition
-from app.core.models.scenario import Scenario
+from app.models.project import current_project, EventTrigger
+from app.models.event import EventCondition
+from app.models.scenario import Scenario
 from app.ui.widgets.time_input_widget import TimeInputWidget
 from app.ui.widgets import message_box as msgbox
 import app.core.state as app_state

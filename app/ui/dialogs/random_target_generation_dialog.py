@@ -12,8 +12,8 @@ from PyQt6.QtWidgets import (
     QDialog, QFormLayout, QComboBox, QDoubleSpinBox, QLabel, QSpinBox, QDialogButtonBox
 )
 
-from app.core.models.project import current_project
-from app.core.models.ship import SHIP_CLASS_DIMENSIONS
+from app.models.project import current_project
+from app.models.ship import SHIP_CLASS_DIMENSIONS
 
 
 class RTGDialog(QDialog):

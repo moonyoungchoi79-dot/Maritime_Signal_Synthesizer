@@ -15,11 +15,11 @@ import datetime
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from app.core.models.ship import ShipData
-from app.core.models.area import Area
-from app.core.models.event import EventTrigger
-from app.core.models.settings import ProjectSettings
-from app.core.models.map_info import MapInfo
+from app.models.ship import ShipData
+from app.models.area import Area
+from app.models.event import EventTrigger
+from app.models.settings import ProjectSettings
+from app.models.map_info import MapInfo
 
 
 @dataclass

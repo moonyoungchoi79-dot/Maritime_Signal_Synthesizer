@@ -30,7 +30,7 @@ from PyQt6.QtCore import (
 from PyQt6.QtGui import (
     QColor, QPen, QPainter, QPainterPath, QPolygonF, QBrush, QFont
 )
-from app.core.models.project import current_project
+from app.models.project import current_project
 from app.core.geometry import get_optimal_grid_step, normalize_lon
 
 from app.ui.map.ruler_overlay import RulerOverlay

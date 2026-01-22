@@ -44,14 +44,14 @@ from matplotlib.figure import Figure
 import matplotlib.ticker as ticker
 
 from app.core.constants import CSV_HEADER
-from app.core.models.project import current_project, ShipData
+from app.models.project import current_project, ShipData
 from app.core.utils import sanitize_filename
 from app.core.geometry import coords_to_pixel, pixel_to_coords, normalize_lon, great_circle_path_pixels
 from app.core.nmea import parse_nmea_fields
 from app.workers.simulation_worker import SimulationWorker
-from app.workers.rtg_worker import RTGWorker
+from app.workers.random_target_generation_worker import RTGWorker
 from app.ui.map.sim_map_view import SimMapView
-from app.ui.dialogs.rtg_dialog import RTGDialog
+from app.ui.dialogs.random_target_generation_dialog import RTGDialog
 from app.ui.widgets.time_input_widget import TimeInputWidget
 from app.ui.widgets.panorama_view import PanoramaView, CameraPanoramaDialog
 from app.core.camera_projection import DualCameraBboxGenerator
@@ -1269,7 +1269,7 @@ class SimulationPanel(QWidget):
 
     def generate_random_targets_logic(self, own_ship, R_nm, N_ai, N_ra, N_both, area_id=-1, ship_class="CONTAINER"):
         import numpy as np  # NumPy for high-speed computation
-        from app.core.models.ship import get_ship_dimensions
+        from app.models.ship import get_ship_dimensions
 
         seed_val = (current_project.seed + len(current_project.ships)) % (2**32 - 1)
         random.seed(seed_val)

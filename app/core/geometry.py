@@ -21,7 +21,7 @@ import numpy as np
 from typing import List, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from app.core.models.map_info import MapInfo
+    from app.models.map_info import MapInfo
 
 
 def vincenty_distance(lat1, lon1, lat2, lon2):

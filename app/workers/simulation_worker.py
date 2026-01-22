@@ -36,7 +36,7 @@ import bisect
 from PyQt6.QtCore import QObject, pyqtSignal, Qt, QPointF, QCoreApplication
 from PyQt6.QtGui import QPolygonF
 
-from app.core.models.project import current_project
+from app.models.project import current_project
 from app.core.geometry import (
     vincenty_distance,
     pixel_to_coords, coords_to_pixel, normalize_lon,

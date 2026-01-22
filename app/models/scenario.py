@@ -16,8 +16,8 @@
 
 import json
 import uuid
-from app.core.models.project import EventTrigger
-from app.core.models.event import EventCondition
+from app.models.project import EventTrigger
+from app.models.event import EventCondition
 
 
 class Scenario:
