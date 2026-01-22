@@ -148,7 +148,7 @@ PyQt6 기반의 사용자 인터페이스 구성요소입니다.
 ##  Project Data Structure
 
 프로젝트를 저장하면 지정된 폴더 내에 다음과 같은 구조로 데이터가 저장됩니다.
-<span style="color: red;">주의! 프로젝트 폴더를 선택하면 그 폴더가 아래 구조에서 MyProject가 됩니다. Desktop 등 다른 파일이 함께 있는 폴더를 선택하면 MyProject.json 파일과 Object, Event, Scenario 폴더가 사용자의 다른 파일들과 뒤섞이게 됩니다.</span>
+###### <span style="color: red;">주의! 프로젝트 폴더를 선택하면 그 폴더가 아래 구조에서 MyProject가 됩니다. Desktop 등 다른 파일이 함께 있는 폴더를 선택하면 MyProject.json 파일과 Object, Event, Scenario 폴더가 사용자의 다른 파일들과 뒤섞이게 됩니다.</span>
 
 ```text
 MyProject/
