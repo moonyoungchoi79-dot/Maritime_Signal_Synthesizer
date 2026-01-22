@@ -77,9 +77,9 @@
 
 ### Root Directory
 - **`main.py`**: 프로그램의 진입점입니다. `QApplication`을 생성하고 테마를 적용한 뒤 `MainWindow`를 실행합니다.
-- **`requirements.txt`**: 프로젝트 실행에 필요한 Python 패키지 의존성 목록입니다.
-- **`README.md`**: 프로젝트 설명 문서입니다.
-- **`LICENSE`**: 프로젝트 라이선스 정보 파일입니다.
+- **`requirements.txt`**: 프로그램 실행에 필요한 Python 패키지 의존성 목록입니다.
+- **`README.md`**: 프로그램 설명 문서입니다.
+- **`LICENSE`**: 프로그램 라이선스 정보 파일입니다.
 
 ### `app/` (Main Package)
 애플리케이션의 핵심 소스 코드가 포함된 패키지입니다.
@@ -168,4 +168,4 @@ MyProject/
 
 ## License
 
-###### This project is licensed under the GPL-3.0 license - see the LICENSE file for details.
+###### This program is licensed under the GPL-3.0 license - see the LICENSE file for details.
