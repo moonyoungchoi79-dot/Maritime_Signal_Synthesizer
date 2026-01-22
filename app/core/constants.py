@@ -13,7 +13,7 @@
 import logging
 
 # 애플리케이션 기본 정보
-APP_NAME = "Maritime Signal Synthesizer"  # 애플리케이션 표시 이름
+APP_NAME = "Maritime Signal Synthesizer 1,0"  # 애플리케이션 표시 이름
 DEFAULT_WINDOW_SIZE = (1600, 900)  # 기본 윈도우 크기 (너비, 높이) 픽셀
 
 # 로깅 설정
